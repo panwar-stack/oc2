@@ -9995,6 +9995,76 @@
             "source": "import { createOc2Client } from \"@oc2-ai/sdk\"\n\nconst client = createOc2Client()\nawait client.team.messages({\n  ...\n})"
           }
         ]
+      },
+      "post": {
+        "tags": [
+          "team"
+        ],
+        "operationId": "team.messagesSend",
+        "parameters": [
+          {
+            "name": "teamID",
+            "in": "path",
+            "schema": {
+              "type": "string"
+            },
+            "required": true
+          },
+          {
+            "name": "sessionID",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            },
+            "required": true
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Sent team message",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TeamMessage"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "TeamRequestError | InvalidRequestError",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/components/schemas/TeamRequestError"
+                    },
+                    {
+                      "$ref": "#/components/schemas/InvalidRequestError"
+                    }
+                  ]
+                }
+              }
+            }
+          }
+        },
+        "description": "Remote mailbox mutation equivalent to sendMessage. The authenticated caller session is the sender.",
+        "summary": "Send team message",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/TeamSendMessagePayload"
+              }
+            }
+          }
+        },
+        "x-codeSamples": [
+          {
+            "lang": "js",
+            "source": "import { createOc2Client } from \"@oc2-ai/sdk\"\n\nconst client = createOc2Client()\nawait client.team.messagesSend({\n  ...\n})"
+          }
+        ]
       }
     },
     "/team/{teamID}/shutdown": {
@@ -10072,6 +10142,964 @@
           {
             "lang": "js",
             "source": "import { createOc2Client } from \"@oc2-ai/sdk\"\n\nconst client = createOc2Client()\nawait client.team.shutdown({\n  ...\n})"
+          }
+        ]
+      }
+    },
+    "/team/{teamID}/members/{sessionID}/context": {
+      "get": {
+        "tags": [
+          "team"
+        ],
+        "operationId": "team.getMemberContext",
+        "parameters": [
+          {
+            "name": "teamID",
+            "in": "path",
+            "schema": {
+              "type": "string"
+            },
+            "required": true
+          },
+          {
+            "name": "sessionID",
+            "in": "path",
+            "schema": {
+              "type": "string"
+            },
+            "required": true
+          },
+          {
+            "name": "sessionID",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            },
+            "required": true
+          },
+          {
+            "name": "messageID",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            },
+            "required": false
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Team member pre-run context",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TeamMemberContext"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "TeamRequestError | InvalidRequestError",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/components/schemas/TeamRequestError"
+                    },
+                    {
+                      "$ref": "#/components/schemas/InvalidRequestError"
+                    }
+                  ]
+                }
+              }
+            }
+          }
+        },
+        "description": "Fetch the role prompt, agent, model, permission, and message history a member process needs before a run.",
+        "summary": "Get member pre-run context",
+        "x-codeSamples": [
+          {
+            "lang": "js",
+            "source": "import { createOc2Client } from \"@oc2-ai/sdk\"\n\nconst client = createOc2Client()\nawait client.team.getMemberContext({\n  ...\n})"
+          }
+        ]
+      }
+    },
+    "/team/{teamID}/members/{sessionID}/run": {
+      "post": {
+        "tags": [
+          "team"
+        ],
+        "operationId": "team.runMember",
+        "parameters": [
+          {
+            "name": "teamID",
+            "in": "path",
+            "schema": {
+              "type": "string"
+            },
+            "required": true
+          },
+          {
+            "name": "sessionID",
+            "in": "path",
+            "schema": {
+              "type": "string"
+            },
+            "required": true
+          },
+          {
+            "name": "sessionID",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            },
+            "required": true
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Run request accepted",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TeamMemberResult"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "TeamRequestError | InvalidRequestError",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/components/schemas/TeamRequestError"
+                    },
+                    {
+                      "$ref": "#/components/schemas/InvalidRequestError"
+                    }
+                  ]
+                }
+              }
+            }
+          }
+        },
+        "description": "Persist a run instruction to a member's mailbox and wake the member. Lead-only; the member process wakes on its SSE events stream.",
+        "summary": "Deliver a run request",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/TeamRunPayload"
+              }
+            }
+          }
+        },
+        "x-codeSamples": [
+          {
+            "lang": "js",
+            "source": "import { createOc2Client } from \"@oc2-ai/sdk\"\n\nconst client = createOc2Client()\nawait client.team.runMember({\n  ...\n})"
+          }
+        ]
+      }
+    },
+    "/team/{teamID}/members/{sessionID}/result": {
+      "post": {
+        "tags": [
+          "team"
+        ],
+        "operationId": "team.memberResult",
+        "parameters": [
+          {
+            "name": "teamID",
+            "in": "path",
+            "schema": {
+              "type": "string"
+            },
+            "required": true
+          },
+          {
+            "name": "sessionID",
+            "in": "path",
+            "schema": {
+              "type": "string"
+            },
+            "required": true
+          },
+          {
+            "name": "sessionID",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            },
+            "required": true
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Member terminal result settled",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TeamMemberResult"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "TeamRequestError | InvalidRequestError",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/components/schemas/TeamRequestError"
+                    },
+                    {
+                      "$ref": "#/components/schemas/InvalidRequestError"
+                    }
+                  ]
+                }
+              }
+            }
+          }
+        },
+        "description": "Member reports terminal completion/cancel/failure; the lead settles the member with the existing terminal transaction.",
+        "summary": "Report member terminal result",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/TeamResultPayload"
+              }
+            }
+          }
+        },
+        "x-codeSamples": [
+          {
+            "lang": "js",
+            "source": "import { createOc2Client } from \"@oc2-ai/sdk\"\n\nconst client = createOc2Client()\nawait client.team.memberResult({\n  ...\n})"
+          }
+        ]
+      }
+    },
+    "/team/{teamID}/members/{sessionID}/heartbeat": {
+      "post": {
+        "tags": [
+          "team"
+        ],
+        "operationId": "team.memberHeartbeat",
+        "parameters": [
+          {
+            "name": "teamID",
+            "in": "path",
+            "schema": {
+              "type": "string"
+            },
+            "required": true
+          },
+          {
+            "name": "sessionID",
+            "in": "path",
+            "schema": {
+              "type": "string"
+            },
+            "required": true
+          },
+          {
+            "name": "sessionID",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            },
+            "required": true
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Member liveness recorded",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TeamHeartbeatResult"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "TeamRequestError | InvalidRequestError",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/components/schemas/TeamRequestError"
+                    },
+                    {
+                      "$ref": "#/components/schemas/InvalidRequestError"
+                    }
+                  ]
+                }
+              }
+            }
+          }
+        },
+        "description": "Refresh a member's daemon_last_active liveness timestamp.",
+        "summary": "Record member heartbeat",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/TeamHeartbeatPayload"
+              }
+            }
+          }
+        },
+        "x-codeSamples": [
+          {
+            "lang": "js",
+            "source": "import { createOc2Client } from \"@oc2-ai/sdk\"\n\nconst client = createOc2Client()\nawait client.team.memberHeartbeat({\n  ...\n})"
+          }
+        ]
+      }
+    },
+    "/team/{teamID}/members/{sessionID}/events": {
+      "get": {
+        "tags": [
+          "team"
+        ],
+        "operationId": "team.memberEvents",
+        "parameters": [
+          {
+            "name": "teamID",
+            "in": "path",
+            "schema": {
+              "type": "string"
+            },
+            "required": true
+          },
+          {
+            "name": "sessionID",
+            "in": "path",
+            "schema": {
+              "type": "string"
+            },
+            "required": true
+          },
+          {
+            "name": "sessionID",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            },
+            "required": true
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Team member event stream",
+            "content": {
+              "text/event-stream": {
+                "schema": {
+                  "$ref": "#/components/schemas/Event"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "TeamRequestError | InvalidRequestError",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/components/schemas/TeamRequestError"
+                    },
+                    {
+                      "$ref": "#/components/schemas/InvalidRequestError"
+                    }
+                  ]
+                }
+              }
+            }
+          }
+        },
+        "description": "Server-sent event stream for a member process: run request wake, pause/cancel, new mail, and plan decisions.",
+        "summary": "Subscribe to member events",
+        "x-codeSamples": [
+          {
+            "lang": "js",
+            "source": "import { createOc2Client } from \"@oc2-ai/sdk\"\n\nconst client = createOc2Client()\nawait client.team.memberEvents({\n  ...\n})"
+          }
+        ]
+      }
+    },
+    "/team/{teamID}/messages/claim": {
+      "post": {
+        "tags": [
+          "team"
+        ],
+        "operationId": "team.messagesClaim",
+        "parameters": [
+          {
+            "name": "teamID",
+            "in": "path",
+            "schema": {
+              "type": "string"
+            },
+            "required": true
+          },
+          {
+            "name": "sessionID",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            },
+            "required": true
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Claimed messages",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/TeamMessage"
+                  },
+                  "description": "Claimed messages"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "TeamRequestError | InvalidRequestError",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/components/schemas/TeamRequestError"
+                    },
+                    {
+                      "$ref": "#/components/schemas/InvalidRequestError"
+                    }
+                  ]
+                }
+              }
+            }
+          }
+        },
+        "description": "Remote mailbox mutation equivalent to claimPendingMessages for the authenticated caller session.",
+        "summary": "Claim pending messages",
+        "x-codeSamples": [
+          {
+            "lang": "js",
+            "source": "import { createOc2Client } from \"@oc2-ai/sdk\"\n\nconst client = createOc2Client()\nawait client.team.messagesClaim({\n  ...\n})"
+          }
+        ]
+      }
+    },
+    "/team/{teamID}/messages/{messageID}/ack": {
+      "post": {
+        "tags": [
+          "team"
+        ],
+        "operationId": "team.messagesAck",
+        "parameters": [
+          {
+            "name": "teamID",
+            "in": "path",
+            "schema": {
+              "type": "string"
+            },
+            "required": true
+          },
+          {
+            "name": "messageID",
+            "in": "path",
+            "schema": {
+              "type": "string"
+            },
+            "required": true
+          },
+          {
+            "name": "sessionID",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            },
+            "required": true
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Message acknowledged",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TeamMessageAckResult"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "TeamRequestError | InvalidRequestError",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/components/schemas/TeamRequestError"
+                    },
+                    {
+                      "$ref": "#/components/schemas/InvalidRequestError"
+                    }
+                  ]
+                }
+              }
+            }
+          }
+        },
+        "description": "Remote mailbox mutation equivalent to markMessageDelivered for the authenticated caller session.",
+        "summary": "Acknowledge a delivered message",
+        "x-codeSamples": [
+          {
+            "lang": "js",
+            "source": "import { createOc2Client } from \"@oc2-ai/sdk\"\n\nconst client = createOc2Client()\nawait client.team.messagesAck({\n  ...\n})"
+          }
+        ]
+      }
+    },
+    "/team/{teamID}/messages/{messageID}/release": {
+      "post": {
+        "tags": [
+          "team"
+        ],
+        "operationId": "team.messagesRelease",
+        "parameters": [
+          {
+            "name": "teamID",
+            "in": "path",
+            "schema": {
+              "type": "string"
+            },
+            "required": true
+          },
+          {
+            "name": "messageID",
+            "in": "path",
+            "schema": {
+              "type": "string"
+            },
+            "required": true
+          },
+          {
+            "name": "sessionID",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            },
+            "required": true
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Message released",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TeamMessageAckResult"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "TeamRequestError | InvalidRequestError",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/components/schemas/TeamRequestError"
+                    },
+                    {
+                      "$ref": "#/components/schemas/InvalidRequestError"
+                    }
+                  ]
+                }
+              }
+            }
+          }
+        },
+        "description": "Remote mailbox mutation equivalent to releaseClaimedMessages for the authenticated caller session.",
+        "summary": "Release a claimed message",
+        "x-codeSamples": [
+          {
+            "lang": "js",
+            "source": "import { createOc2Client } from \"@oc2-ai/sdk\"\n\nconst client = createOc2Client()\nawait client.team.messagesRelease({\n  ...\n})"
+          }
+        ]
+      }
+    },
+    "/team/{teamID}/tasks/{taskID}/claim": {
+      "post": {
+        "tags": [
+          "team"
+        ],
+        "operationId": "team.taskClaim",
+        "parameters": [
+          {
+            "name": "teamID",
+            "in": "path",
+            "schema": {
+              "type": "string"
+            },
+            "required": true
+          },
+          {
+            "name": "taskID",
+            "in": "path",
+            "schema": {
+              "type": "string"
+            },
+            "required": true
+          },
+          {
+            "name": "sessionID",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            },
+            "required": true
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Claimed task",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TeamTask"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "TeamRequestError | InvalidRequestError",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/components/schemas/TeamRequestError"
+                    },
+                    {
+                      "$ref": "#/components/schemas/InvalidRequestError"
+                    }
+                  ]
+                }
+              }
+            }
+          }
+        },
+        "description": "Remote task mutation equivalent to team_task_claim.",
+        "summary": "Claim a team task",
+        "x-codeSamples": [
+          {
+            "lang": "js",
+            "source": "import { createOc2Client } from \"@oc2-ai/sdk\"\n\nconst client = createOc2Client()\nawait client.team.taskClaim({\n  ...\n})"
+          }
+        ]
+      }
+    },
+    "/team/{teamID}/tasks/{taskID}/update": {
+      "post": {
+        "tags": [
+          "team"
+        ],
+        "operationId": "team.taskUpdate",
+        "parameters": [
+          {
+            "name": "teamID",
+            "in": "path",
+            "schema": {
+              "type": "string"
+            },
+            "required": true
+          },
+          {
+            "name": "taskID",
+            "in": "path",
+            "schema": {
+              "type": "string"
+            },
+            "required": true
+          },
+          {
+            "name": "sessionID",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            },
+            "required": true
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Updated task",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TeamTask"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "TeamRequestError | InvalidRequestError",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/components/schemas/TeamRequestError"
+                    },
+                    {
+                      "$ref": "#/components/schemas/InvalidRequestError"
+                    }
+                  ]
+                }
+              }
+            }
+          }
+        },
+        "description": "Remote task mutation equivalent to team_task_update.",
+        "summary": "Update a team task",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/TeamTaskUpdatePayload"
+              }
+            }
+          }
+        },
+        "x-codeSamples": [
+          {
+            "lang": "js",
+            "source": "import { createOc2Client } from \"@oc2-ai/sdk\"\n\nconst client = createOc2Client()\nawait client.team.taskUpdate({\n  ...\n})"
+          }
+        ]
+      }
+    },
+    "/team/{teamID}/members/{sessionID}/plan/{action}": {
+      "post": {
+        "tags": [
+          "team"
+        ],
+        "operationId": "team.memberPlan",
+        "parameters": [
+          {
+            "name": "teamID",
+            "in": "path",
+            "schema": {
+              "type": "string"
+            },
+            "required": true
+          },
+          {
+            "name": "sessionID",
+            "in": "path",
+            "schema": {
+              "type": "string"
+            },
+            "required": true
+          },
+          {
+            "name": "action",
+            "in": "path",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "submit",
+                "decide"
+              ]
+            },
+            "required": true
+          },
+          {
+            "name": "sessionID",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            },
+            "required": true
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Plan submission or decision result",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TeamPlanResult"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "TeamRequestError | InvalidRequestError",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/components/schemas/TeamRequestError"
+                    },
+                    {
+                      "$ref": "#/components/schemas/InvalidRequestError"
+                    }
+                  ]
+                }
+              }
+            }
+          }
+        },
+        "description": "Plan-mode submit (member to lead) and decide (lead approve/reject) over the wire. action=submit requires the member session; action=decide requires the lead session.",
+        "summary": "Submit or decide a member plan",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/TeamPlanPayload"
+              }
+            }
+          }
+        },
+        "x-codeSamples": [
+          {
+            "lang": "js",
+            "source": "import { createOc2Client } from \"@oc2-ai/sdk\"\n\nconst client = createOc2Client()\nawait client.team.memberPlan({\n  ...\n})"
+          }
+        ]
+      }
+    },
+    "/team/{teamID}/transcript/sync": {
+      "post": {
+        "tags": [
+          "team"
+        ],
+        "operationId": "team.transcriptSync",
+        "parameters": [
+          {
+            "name": "teamID",
+            "in": "path",
+            "schema": {
+              "type": "string"
+            },
+            "required": true
+          },
+          {
+            "name": "sessionID",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            },
+            "required": true
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Transcript events replayed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TeamTranscriptSyncResult"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "TeamRequestError | InvalidRequestError",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/components/schemas/TeamRequestError"
+                    },
+                    {
+                      "$ref": "#/components/schemas/InvalidRequestError"
+                    }
+                  ]
+                }
+              }
+            }
+          }
+        },
+        "description": "Push member-local session events; the lead replays them into the member session aggregate with the existing projector.",
+        "summary": "Sync member transcript events",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "directory": {
+                    "type": "string"
+                  },
+                  "events": {
+                    "type": "array",
+                    "minItems": 1,
+                    "items": {
+                      "type": "object",
+                      "properties": {
+                        "id": {
+                          "type": "string",
+                          "pattern": "^evt_"
+                        },
+                        "aggregateID": {
+                          "type": "string"
+                        },
+                        "seq": {
+                          "type": "integer",
+                          "minimum": 0
+                        },
+                        "type": {
+                          "type": "string"
+                        },
+                        "data": {
+                          "type": "object"
+                        }
+                      },
+                      "required": [
+                        "id",
+                        "aggregateID",
+                        "seq",
+                        "type",
+                        "data"
+                      ],
+                      "additionalProperties": false
+                    }
+                  }
+                },
+                "required": [
+                  "directory",
+                  "events"
+                ],
+                "additionalProperties": false
+              }
+            }
+          }
+        },
+        "x-codeSamples": [
+          {
+            "lang": "js",
+            "source": "import { createOc2Client } from \"@oc2-ai/sdk\"\n\nconst client = createOc2Client()\nawait client.team.transcriptSync({\n  ...\n})"
           }
         ]
       }
@@ -22688,6 +23716,12 @@
               },
               "agent_teams": {
                 "type": "boolean"
+              },
+              "drop_reasoning": {
+                "type": "boolean"
+              },
+              "team_multiprocess": {
+                "type": "boolean"
               }
             },
             "additionalProperties": false
@@ -29937,6 +30971,564 @@
           "cancelled_tasks",
           "released_reservations",
           "session_cancellation_failures"
+        ],
+        "additionalProperties": false
+      },
+      "TeamMemberModel": {
+        "type": "object",
+        "properties": {
+          "provider_id": {
+            "type": "string"
+          },
+          "model_id": {
+            "type": "string"
+          },
+          "variant": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "provider_id",
+          "model_id"
+        ],
+        "additionalProperties": false
+      },
+      "TeamMemberContext": {
+        "type": "object",
+        "properties": {
+          "team": {
+            "$ref": "#/components/schemas/TeamInfo"
+          },
+          "member": {
+            "type": "object",
+            "properties": {
+              "id": {
+                "type": "string"
+              },
+              "team_id": {
+                "type": "string"
+              },
+              "session_id": {
+                "type": "string"
+              },
+              "name": {
+                "type": "string"
+              },
+              "agent_type": {
+                "type": "string"
+              },
+              "model": {
+                "$ref": "#/components/schemas/TeamMemberModel"
+              },
+              "role_prompt": {
+                "type": "string"
+              },
+              "status": {
+                "type": "string"
+              },
+              "lifecycle": {
+                "type": "string"
+              },
+              "daemon_state": {
+                "type": "string"
+              },
+              "daemon_last_active": {
+                "anyOf": [
+                  {
+                    "type": "number"
+                  },
+                  {
+                    "type": "string",
+                    "enum": [
+                      "NaN"
+                    ]
+                  },
+                  {
+                    "type": "string",
+                    "enum": [
+                      "Infinity"
+                    ]
+                  },
+                  {
+                    "type": "string",
+                    "enum": [
+                      "-Infinity"
+                    ]
+                  },
+                  {
+                    "type": "string",
+                    "enum": [
+                      "Infinity",
+                      "-Infinity",
+                      "NaN"
+                    ]
+                  }
+                ]
+              },
+              "daemon_error": {
+                "type": "string"
+              },
+              "plan_mode": {
+                "type": "boolean"
+              },
+              "work_mode": {
+                "type": "string"
+              },
+              "dependency_ids": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "result": {
+                "type": "string"
+              },
+              "time_created": {
+                "anyOf": [
+                  {
+                    "type": "number"
+                  },
+                  {
+                    "type": "string",
+                    "enum": [
+                      "NaN"
+                    ]
+                  },
+                  {
+                    "type": "string",
+                    "enum": [
+                      "Infinity"
+                    ]
+                  },
+                  {
+                    "type": "string",
+                    "enum": [
+                      "-Infinity"
+                    ]
+                  },
+                  {
+                    "type": "string",
+                    "enum": [
+                      "Infinity",
+                      "-Infinity",
+                      "NaN"
+                    ]
+                  }
+                ]
+              },
+              "time_updated": {
+                "anyOf": [
+                  {
+                    "type": "number"
+                  },
+                  {
+                    "type": "string",
+                    "enum": [
+                      "NaN"
+                    ]
+                  },
+                  {
+                    "type": "string",
+                    "enum": [
+                      "Infinity"
+                    ]
+                  },
+                  {
+                    "type": "string",
+                    "enum": [
+                      "-Infinity"
+                    ]
+                  },
+                  {
+                    "type": "string",
+                    "enum": [
+                      "Infinity",
+                      "-Infinity",
+                      "NaN"
+                    ]
+                  }
+                ]
+              }
+            },
+            "required": [
+              "id",
+              "team_id",
+              "session_id",
+              "name",
+              "agent_type",
+              "model",
+              "role_prompt",
+              "status",
+              "lifecycle",
+              "daemon_state",
+              "daemon_last_active",
+              "daemon_error",
+              "plan_mode",
+              "work_mode",
+              "dependency_ids",
+              "result",
+              "time_created",
+              "time_updated"
+            ],
+            "additionalProperties": false
+          },
+          "session": {
+            "type": "object",
+            "properties": {
+              "id": {
+                "type": "string"
+              },
+              "agent": {
+                "type": "string"
+              },
+              "model": {
+                "$ref": "#/components/schemas/TeamMemberModel"
+              },
+              "permission": {
+                "$ref": "#/components/schemas/PermissionRuleset"
+              }
+            },
+            "required": [
+              "id"
+            ],
+            "additionalProperties": false
+          },
+          "messages": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "info": {
+                  "$ref": "#/components/schemas/Message"
+                },
+                "parts": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/Part"
+                  }
+                }
+              },
+              "required": [
+                "info",
+                "parts"
+              ],
+              "additionalProperties": false
+            }
+          }
+        },
+        "required": [
+          "team",
+          "member",
+          "session",
+          "messages"
+        ],
+        "additionalProperties": false
+      },
+      "TeamRequestError": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string",
+            "enum": [
+              "TeamRequestError"
+            ]
+          },
+          "data": {
+            "type": "object",
+            "properties": {
+              "message": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "message"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "required": [
+          "name",
+          "data"
+        ],
+        "additionalProperties": false
+      },
+      "TeamRunPayload": {
+        "type": "object",
+        "properties": {
+          "instruction": {
+            "type": "string"
+          },
+          "messageID": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "instruction"
+        ],
+        "additionalProperties": false
+      },
+      "TeamMemberResult": {
+        "type": "object",
+        "properties": {
+          "member_id": {
+            "type": "string"
+          },
+          "session_id": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "member_id",
+          "session_id",
+          "status"
+        ],
+        "additionalProperties": false
+      },
+      "TeamResultPayload": {
+        "type": "object",
+        "properties": {
+          "status": {
+            "type": "string",
+            "enum": [
+              "completed",
+              "cancelled",
+              "failed"
+            ]
+          },
+          "result": {
+            "type": "string"
+          },
+          "failure_code": {
+            "type": "string",
+            "enum": [
+              "empty_result",
+              "provider_error",
+              "dependency_failed",
+              "missing_task_handoff"
+            ]
+          },
+          "transcript_cursor": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "status"
+        ],
+        "additionalProperties": false
+      },
+      "TeamHeartbeatPayload": {
+        "type": "object",
+        "properties": {
+          "daemon_state": {
+            "type": "string",
+            "enum": [
+              "initializing",
+              "running",
+              "idle"
+            ]
+          },
+          "daemon_error": {
+            "type": "string"
+          }
+        },
+        "additionalProperties": false
+      },
+      "TeamHeartbeatResult": {
+        "type": "object",
+        "properties": {
+          "member_id": {
+            "type": "string"
+          },
+          "session_id": {
+            "type": "string"
+          },
+          "daemon_last_active": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "string",
+                "enum": [
+                  "NaN"
+                ]
+              },
+              {
+                "type": "string",
+                "enum": [
+                  "Infinity"
+                ]
+              },
+              {
+                "type": "string",
+                "enum": [
+                  "-Infinity"
+                ]
+              },
+              {
+                "type": "string",
+                "enum": [
+                  "Infinity",
+                  "-Infinity",
+                  "NaN"
+                ]
+              }
+            ]
+          }
+        },
+        "required": [
+          "member_id",
+          "session_id",
+          "daemon_last_active"
+        ],
+        "additionalProperties": false
+      },
+      "TeamSendMessagePayload": {
+        "type": "object",
+        "properties": {
+          "recipients": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "body": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "recipients",
+          "body"
+        ],
+        "additionalProperties": false
+      },
+      "TeamMessageAckResult": {
+        "type": "object",
+        "properties": {
+          "acked": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "acked"
+        ],
+        "additionalProperties": false
+      },
+      "TeamTaskUpdatePayload": {
+        "type": "object",
+        "properties": {
+          "status": {
+            "type": "string",
+            "enum": [
+              "pending",
+              "in_progress",
+              "completed",
+              "cancelled"
+            ]
+          },
+          "assignee": {
+            "type": "string"
+          },
+          "handoff": {
+            "$ref": "#/components/schemas/TeamTaskHandoff"
+          },
+          "handoff_path_keys": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        },
+        "additionalProperties": false
+      },
+      "TeamPlanPayload": {
+        "type": "object",
+        "properties": {
+          "plan": {
+            "type": "string"
+          },
+          "decision": {
+            "type": "string",
+            "enum": [
+              "approve",
+              "reject"
+            ]
+          },
+          "feedback": {
+            "type": "string"
+          }
+        },
+        "additionalProperties": false
+      },
+      "TeamPlanResult": {
+        "type": "object",
+        "properties": {
+          "decision": {
+            "type": "string"
+          },
+          "member_id": {
+            "type": "string"
+          },
+          "session_id": {
+            "type": "string"
+          },
+          "messageID": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "decision",
+          "member_id",
+          "session_id"
+        ],
+        "additionalProperties": false
+      },
+      "TeamTranscriptSyncResult": {
+        "type": "object",
+        "properties": {
+          "sessionID": {
+            "type": "string"
+          },
+          "events": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "string",
+                "enum": [
+                  "NaN"
+                ]
+              },
+              {
+                "type": "string",
+                "enum": [
+                  "Infinity"
+                ]
+              },
+              {
+                "type": "string",
+                "enum": [
+                  "-Infinity"
+                ]
+              },
+              {
+                "type": "string",
+                "enum": [
+                  "Infinity",
+                  "-Infinity",
+                  "NaN"
+                ]
+              }
+            ]
+          }
+        },
+        "required": [
+          "sessionID",
+          "events"
         ],
         "additionalProperties": false
       },

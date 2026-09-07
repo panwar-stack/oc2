@@ -1988,6 +1988,108 @@ const scenarios: Scenario[] = [
     }))
     .status(400),
   http.protected
+    .get("/team/{teamID}/members/{sessionID}/context", "team.getMemberContext")
+    .at((ctx) => ({
+      path: `${route("/team/{teamID}/members/{sessionID}/context", { teamID: "team_httpapi_missing", sessionID: "ses_httpapi_missing" })}?${new URLSearchParams({ sessionID: "ses_httpapi_missing" })}`,
+      headers: ctx.headers(),
+    }))
+    .status(400),
+  http.protected
+    .post("/team/{teamID}/members/{sessionID}/run", "team.runMember")
+    .at((ctx) => ({
+      path: `${route("/team/{teamID}/members/{sessionID}/run", { teamID: "team_httpapi_missing", sessionID: "ses_httpapi_missing" })}?${new URLSearchParams({ sessionID: "ses_httpapi_missing" })}`,
+      headers: ctx.headers(),
+      body: { instruction: "exercise run request" },
+    }))
+    .status(400),
+  http.protected
+    .post("/team/{teamID}/members/{sessionID}/result", "team.memberResult")
+    .at((ctx) => ({
+      path: `${route("/team/{teamID}/members/{sessionID}/result", { teamID: "team_httpapi_missing", sessionID: "ses_httpapi_missing" })}?${new URLSearchParams({ sessionID: "ses_httpapi_missing" })}`,
+      headers: ctx.headers(),
+      body: { status: "completed" },
+    }))
+    .status(400),
+  http.protected
+    .post("/team/{teamID}/members/{sessionID}/heartbeat", "team.memberHeartbeat")
+    .at((ctx) => ({
+      path: `${route("/team/{teamID}/members/{sessionID}/heartbeat", { teamID: "team_httpapi_missing", sessionID: "ses_httpapi_missing" })}?${new URLSearchParams({ sessionID: "ses_httpapi_missing" })}`,
+      headers: ctx.headers(),
+      body: { daemon_state: "running" },
+    }))
+    .status(400),
+  http.protected
+    .get("/team/{teamID}/members/{sessionID}/events", "team.memberEvents")
+    .stream()
+    .at((ctx) => ({
+      path: `${route("/team/{teamID}/members/{sessionID}/events", { teamID: "team_httpapi_missing", sessionID: "ses_httpapi_missing" })}?${new URLSearchParams({ sessionID: "ses_httpapi_missing" })}`,
+      headers: ctx.headers(),
+    }))
+    .status(400),
+  http.protected
+    .post("/team/{teamID}/messages", "team.messagesSend")
+    .at((ctx) => ({
+      path: `${route("/team/{teamID}/messages", { teamID: "team_httpapi_missing" })}?${new URLSearchParams({ sessionID: "ses_httpapi_missing" })}`,
+      headers: ctx.headers(),
+      body: { recipients: ["ses_httpapi_missing"], body: "exercise message" },
+    }))
+    .status(400),
+  http.protected
+    .post("/team/{teamID}/messages/claim", "team.messagesClaim")
+    .at((ctx) => ({
+      path: `${route("/team/{teamID}/messages/claim", { teamID: "team_httpapi_missing" })}?${new URLSearchParams({ sessionID: "ses_httpapi_missing" })}`,
+      headers: ctx.headers(),
+    }))
+    .status(400),
+  http.protected
+    .post("/team/{teamID}/messages/{messageID}/ack", "team.messagesAck")
+    .at((ctx) => ({
+      path: `${route("/team/{teamID}/messages/{messageID}/ack", { teamID: "team_httpapi_missing", messageID: "msg_httpapi_missing" })}?${new URLSearchParams({ sessionID: "ses_httpapi_missing" })}`,
+      headers: ctx.headers(),
+    }))
+    .status(400),
+  http.protected
+    .post("/team/{teamID}/messages/{messageID}/release", "team.messagesRelease")
+    .at((ctx) => ({
+      path: `${route("/team/{teamID}/messages/{messageID}/release", { teamID: "team_httpapi_missing", messageID: "msg_httpapi_missing" })}?${new URLSearchParams({ sessionID: "ses_httpapi_missing" })}`,
+      headers: ctx.headers(),
+    }))
+    .status(400),
+  http.protected
+    .post("/team/{teamID}/tasks/{taskID}/claim", "team.taskClaim")
+    .at((ctx) => ({
+      path: `${route("/team/{teamID}/tasks/{taskID}/claim", { teamID: "team_httpapi_missing", taskID: "task_httpapi_missing" })}?${new URLSearchParams({ sessionID: "ses_httpapi_missing" })}`,
+      headers: ctx.headers(),
+    }))
+    .status(400),
+  http.protected
+    .post("/team/{teamID}/tasks/{taskID}/update", "team.taskUpdate")
+    .at((ctx) => ({
+      path: `${route("/team/{teamID}/tasks/{taskID}/update", { teamID: "team_httpapi_missing", taskID: "task_httpapi_missing" })}?${new URLSearchParams({ sessionID: "ses_httpapi_missing" })}`,
+      headers: ctx.headers(),
+      body: { status: "in_progress" },
+    }))
+    .status(400),
+  http.protected
+    .post("/team/{teamID}/members/{sessionID}/plan/{action}", "team.memberPlan")
+    .at((ctx) => ({
+      path: `${route("/team/{teamID}/members/{sessionID}/plan/{action}", { teamID: "team_httpapi_missing", sessionID: "ses_httpapi_missing", action: "submit" })}?${new URLSearchParams({ sessionID: "ses_httpapi_missing" })}`,
+      headers: ctx.headers(),
+      body: { plan: "exercise plan" },
+    }))
+    .status(400),
+  http.protected
+    .post("/team/{teamID}/transcript/sync", "team.transcriptSync")
+    .at((ctx) => ({
+      path: `${route("/team/{teamID}/transcript/sync", { teamID: "team_httpapi_missing" })}?${new URLSearchParams({ sessionID: "ses_httpapi_missing" })}`,
+      headers: ctx.headers(),
+      body: {
+        directory: ctx.directory,
+        events: [{ id: "evt_httpapi_exercise", aggregateID: "ses_httpapi_missing", seq: 0, type: "session.prompt", data: {} }],
+      },
+    }))
+    .status(400),
+  http.protected
     .post("/global/upgrade", "global.upgrade")
     .global()
     .probe({ path: "/global/upgrade", body: { target: 1 } })

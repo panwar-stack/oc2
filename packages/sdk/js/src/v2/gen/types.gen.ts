@@ -2330,6 +2330,8 @@ export type Config = {
     mcp_timeout?: number
     policies?: Array<ConfigV2ExperimentalPolicy>
     agent_teams?: boolean
+    drop_reasoning?: boolean
+    team_multiprocess?: boolean
   }
 }
 
@@ -3912,6 +3914,116 @@ export type TeamShutdownResult = {
   cancelled_tasks: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
   released_reservations: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
   session_cancellation_failures: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+}
+
+export type TeamMemberModel = {
+  provider_id: string
+  model_id: string
+  variant?: string
+}
+
+export type TeamMemberContext = {
+  team: TeamInfo
+  member: {
+    id: string
+    team_id: string
+    session_id: string
+    name: string
+    agent_type: string
+    model: TeamMemberModel
+    role_prompt: string
+    status: string
+    lifecycle: string
+    daemon_state: string
+    daemon_last_active: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+    daemon_error: string
+    plan_mode: boolean
+    work_mode: string
+    dependency_ids: Array<string>
+    result: string
+    time_created: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+    time_updated: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+  }
+  session: {
+    id: string
+    agent?: string
+    model?: TeamMemberModel
+    permission?: PermissionRuleset
+  }
+  messages: Array<{
+    info: Message
+    parts: Array<Part>
+  }>
+}
+
+export type TeamRequestError = {
+  name: "TeamRequestError"
+  data: {
+    message: string
+  }
+}
+
+export type TeamRunPayload = {
+  instruction: string
+  messageID?: string
+}
+
+export type TeamMemberResult = {
+  member_id: string
+  session_id: string
+  status: string
+}
+
+export type TeamResultPayload = {
+  status: "completed" | "cancelled" | "failed"
+  result?: string
+  failure_code?: "empty_result" | "provider_error" | "dependency_failed" | "missing_task_handoff"
+  transcript_cursor?: string
+}
+
+export type TeamHeartbeatPayload = {
+  daemon_state?: "initializing" | "running" | "idle"
+  daemon_error?: string
+}
+
+export type TeamHeartbeatResult = {
+  member_id: string
+  session_id: string
+  daemon_last_active: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+}
+
+export type TeamSendMessagePayload = {
+  recipients: Array<string>
+  body: string
+}
+
+export type TeamMessageAckResult = {
+  acked: boolean
+}
+
+export type TeamTaskUpdatePayload = {
+  status?: "pending" | "in_progress" | "completed" | "cancelled"
+  assignee?: string
+  handoff?: TeamTaskHandoff
+  handoff_path_keys?: Array<string>
+}
+
+export type TeamPlanPayload = {
+  plan?: string
+  decision?: "approve" | "reject"
+  feedback?: string
+}
+
+export type TeamPlanResult = {
+  decision: string
+  member_id: string
+  session_id: string
+  messageID?: string
+}
+
+export type TeamTranscriptSyncResult = {
+  sessionID: string
+  events: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
 }
 
 export type EventTuiPromptAppend = {
@@ -10706,6 +10818,35 @@ export type TeamMessagesResponses = {
 
 export type TeamMessagesResponse = TeamMessagesResponses[keyof TeamMessagesResponses]
 
+export type TeamMessagesSendData = {
+  body?: TeamSendMessagePayload
+  path: {
+    teamID: string
+  }
+  query: {
+    sessionID: string
+  }
+  url: "/team/{teamID}/messages"
+}
+
+export type TeamMessagesSendErrors = {
+  /**
+   * TeamRequestError | InvalidRequestError
+   */
+  400: TeamRequestError | InvalidRequestError
+}
+
+export type TeamMessagesSendError = TeamMessagesSendErrors[keyof TeamMessagesSendErrors]
+
+export type TeamMessagesSendResponses = {
+  /**
+   * Sent team message
+   */
+  200: TeamMessage
+}
+
+export type TeamMessagesSendResponse = TeamMessagesSendResponses[keyof TeamMessagesSendResponses]
+
 export type TeamShutdownData = {
   body?: never
   path: {
@@ -10736,6 +10877,377 @@ export type TeamShutdownResponses = {
 }
 
 export type TeamShutdownResponse = TeamShutdownResponses[keyof TeamShutdownResponses]
+
+export type TeamGetMemberContextData = {
+  body?: never
+  path: {
+    teamID: string
+    sessionID: string
+  }
+  query: {
+    sessionID: string
+    messageID?: string
+  }
+  url: "/team/{teamID}/members/{sessionID}/context"
+}
+
+export type TeamGetMemberContextErrors = {
+  /**
+   * TeamRequestError | InvalidRequestError
+   */
+  400: TeamRequestError | InvalidRequestError
+}
+
+export type TeamGetMemberContextError = TeamGetMemberContextErrors[keyof TeamGetMemberContextErrors]
+
+export type TeamGetMemberContextResponses = {
+  /**
+   * Team member pre-run context
+   */
+  200: TeamMemberContext
+}
+
+export type TeamGetMemberContextResponse = TeamGetMemberContextResponses[keyof TeamGetMemberContextResponses]
+
+export type TeamRunMemberData = {
+  body?: TeamRunPayload
+  path: {
+    teamID: string
+    sessionID: string
+  }
+  query: {
+    sessionID: string
+  }
+  url: "/team/{teamID}/members/{sessionID}/run"
+}
+
+export type TeamRunMemberErrors = {
+  /**
+   * TeamRequestError | InvalidRequestError
+   */
+  400: TeamRequestError | InvalidRequestError
+}
+
+export type TeamRunMemberError = TeamRunMemberErrors[keyof TeamRunMemberErrors]
+
+export type TeamRunMemberResponses = {
+  /**
+   * Run request accepted
+   */
+  200: TeamMemberResult
+}
+
+export type TeamRunMemberResponse = TeamRunMemberResponses[keyof TeamRunMemberResponses]
+
+export type TeamMemberResultData = {
+  body?: TeamResultPayload
+  path: {
+    teamID: string
+    sessionID: string
+  }
+  query: {
+    sessionID: string
+  }
+  url: "/team/{teamID}/members/{sessionID}/result"
+}
+
+export type TeamMemberResultErrors = {
+  /**
+   * TeamRequestError | InvalidRequestError
+   */
+  400: TeamRequestError | InvalidRequestError
+}
+
+export type TeamMemberResultError = TeamMemberResultErrors[keyof TeamMemberResultErrors]
+
+export type TeamMemberResultResponses = {
+  /**
+   * Member terminal result settled
+   */
+  200: TeamMemberResult
+}
+
+export type TeamMemberResultResponse = TeamMemberResultResponses[keyof TeamMemberResultResponses]
+
+export type TeamMemberHeartbeatData = {
+  body?: TeamHeartbeatPayload
+  path: {
+    teamID: string
+    sessionID: string
+  }
+  query: {
+    sessionID: string
+  }
+  url: "/team/{teamID}/members/{sessionID}/heartbeat"
+}
+
+export type TeamMemberHeartbeatErrors = {
+  /**
+   * TeamRequestError | InvalidRequestError
+   */
+  400: TeamRequestError | InvalidRequestError
+}
+
+export type TeamMemberHeartbeatError = TeamMemberHeartbeatErrors[keyof TeamMemberHeartbeatErrors]
+
+export type TeamMemberHeartbeatResponses = {
+  /**
+   * Member liveness recorded
+   */
+  200: TeamHeartbeatResult
+}
+
+export type TeamMemberHeartbeatResponse = TeamMemberHeartbeatResponses[keyof TeamMemberHeartbeatResponses]
+
+export type TeamMemberEventsData = {
+  body?: never
+  path: {
+    teamID: string
+    sessionID: string
+  }
+  query: {
+    sessionID: string
+  }
+  url: "/team/{teamID}/members/{sessionID}/events"
+}
+
+export type TeamMemberEventsErrors = {
+  /**
+   * TeamRequestError | InvalidRequestError
+   */
+  400: TeamRequestError | InvalidRequestError
+}
+
+export type TeamMemberEventsError = TeamMemberEventsErrors[keyof TeamMemberEventsErrors]
+
+export type TeamMemberEventsResponses = {
+  /**
+   * Team member event stream
+   */
+  200: Event
+}
+
+export type TeamMemberEventsResponse = TeamMemberEventsResponses[keyof TeamMemberEventsResponses]
+
+export type TeamMessagesClaimData = {
+  body?: never
+  path: {
+    teamID: string
+  }
+  query: {
+    sessionID: string
+  }
+  url: "/team/{teamID}/messages/claim"
+}
+
+export type TeamMessagesClaimErrors = {
+  /**
+   * TeamRequestError | InvalidRequestError
+   */
+  400: TeamRequestError | InvalidRequestError
+}
+
+export type TeamMessagesClaimError = TeamMessagesClaimErrors[keyof TeamMessagesClaimErrors]
+
+export type TeamMessagesClaimResponses = {
+  /**
+   * Claimed messages
+   */
+  200: Array<TeamMessage>
+}
+
+export type TeamMessagesClaimResponse = TeamMessagesClaimResponses[keyof TeamMessagesClaimResponses]
+
+export type TeamMessagesAckData = {
+  body?: never
+  path: {
+    teamID: string
+    messageID: string
+  }
+  query: {
+    sessionID: string
+  }
+  url: "/team/{teamID}/messages/{messageID}/ack"
+}
+
+export type TeamMessagesAckErrors = {
+  /**
+   * TeamRequestError | InvalidRequestError
+   */
+  400: TeamRequestError | InvalidRequestError
+}
+
+export type TeamMessagesAckError = TeamMessagesAckErrors[keyof TeamMessagesAckErrors]
+
+export type TeamMessagesAckResponses = {
+  /**
+   * Message acknowledged
+   */
+  200: TeamMessageAckResult
+}
+
+export type TeamMessagesAckResponse = TeamMessagesAckResponses[keyof TeamMessagesAckResponses]
+
+export type TeamMessagesReleaseData = {
+  body?: never
+  path: {
+    teamID: string
+    messageID: string
+  }
+  query: {
+    sessionID: string
+  }
+  url: "/team/{teamID}/messages/{messageID}/release"
+}
+
+export type TeamMessagesReleaseErrors = {
+  /**
+   * TeamRequestError | InvalidRequestError
+   */
+  400: TeamRequestError | InvalidRequestError
+}
+
+export type TeamMessagesReleaseError = TeamMessagesReleaseErrors[keyof TeamMessagesReleaseErrors]
+
+export type TeamMessagesReleaseResponses = {
+  /**
+   * Message released
+   */
+  200: TeamMessageAckResult
+}
+
+export type TeamMessagesReleaseResponse = TeamMessagesReleaseResponses[keyof TeamMessagesReleaseResponses]
+
+export type TeamTaskClaimData = {
+  body?: never
+  path: {
+    teamID: string
+    taskID: string
+  }
+  query: {
+    sessionID: string
+  }
+  url: "/team/{teamID}/tasks/{taskID}/claim"
+}
+
+export type TeamTaskClaimErrors = {
+  /**
+   * TeamRequestError | InvalidRequestError
+   */
+  400: TeamRequestError | InvalidRequestError
+}
+
+export type TeamTaskClaimError = TeamTaskClaimErrors[keyof TeamTaskClaimErrors]
+
+export type TeamTaskClaimResponses = {
+  /**
+   * Claimed task
+   */
+  200: TeamTask
+}
+
+export type TeamTaskClaimResponse = TeamTaskClaimResponses[keyof TeamTaskClaimResponses]
+
+export type TeamTaskUpdateData = {
+  body?: TeamTaskUpdatePayload
+  path: {
+    teamID: string
+    taskID: string
+  }
+  query: {
+    sessionID: string
+  }
+  url: "/team/{teamID}/tasks/{taskID}/update"
+}
+
+export type TeamTaskUpdateErrors = {
+  /**
+   * TeamRequestError | InvalidRequestError
+   */
+  400: TeamRequestError | InvalidRequestError
+}
+
+export type TeamTaskUpdateError = TeamTaskUpdateErrors[keyof TeamTaskUpdateErrors]
+
+export type TeamTaskUpdateResponses = {
+  /**
+   * Updated task
+   */
+  200: TeamTask
+}
+
+export type TeamTaskUpdateResponse = TeamTaskUpdateResponses[keyof TeamTaskUpdateResponses]
+
+export type TeamMemberPlanData = {
+  body?: TeamPlanPayload
+  path: {
+    teamID: string
+    sessionID: string
+    action: "submit" | "decide"
+  }
+  query: {
+    sessionID: string
+  }
+  url: "/team/{teamID}/members/{sessionID}/plan/{action}"
+}
+
+export type TeamMemberPlanErrors = {
+  /**
+   * TeamRequestError | InvalidRequestError
+   */
+  400: TeamRequestError | InvalidRequestError
+}
+
+export type TeamMemberPlanError = TeamMemberPlanErrors[keyof TeamMemberPlanErrors]
+
+export type TeamMemberPlanResponses = {
+  /**
+   * Plan submission or decision result
+   */
+  200: TeamPlanResult
+}
+
+export type TeamMemberPlanResponse = TeamMemberPlanResponses[keyof TeamMemberPlanResponses]
+
+export type TeamTranscriptSyncData = {
+  body?: {
+    directory: string
+    events: Array<{
+      id: string
+      aggregateID: string
+      seq: number
+      type: string
+      data: {
+        [key: string]: unknown
+      }
+    }>
+  }
+  path: {
+    teamID: string
+  }
+  query: {
+    sessionID: string
+  }
+  url: "/team/{teamID}/transcript/sync"
+}
+
+export type TeamTranscriptSyncErrors = {
+  /**
+   * TeamRequestError | InvalidRequestError
+   */
+  400: TeamRequestError | InvalidRequestError
+}
+
+export type TeamTranscriptSyncError = TeamTranscriptSyncErrors[keyof TeamTranscriptSyncErrors]
+
+export type TeamTranscriptSyncResponses = {
+  /**
+   * Transcript events replayed
+   */
+  200: TeamTranscriptSyncResult
+}
+
+export type TeamTranscriptSyncResponse = TeamTranscriptSyncResponses[keyof TeamTranscriptSyncResponses]
 
 export type TuiAppendPromptData = {
   body?: {

@@ -9,6 +9,10 @@ const COMPRESSIBLE_CONTENT_TYPE_REGEX =
 const NO_TRANSFORM_REGEX = /(?:^|,)\s*?no-transform\s*?(?:,|$)/i
 
 const STREAMING_PATHS = new Set(["/event", "/global/event"])
+// Team member SSE stream: real request paths carry concrete team/member IDs, so this
+// is a shape match rather than a literal set entry (the OpenAPI template path below
+// is documentation only and never appears on the wire).
+const STREAMING_GET_REGEX = /^\/team\/[^/]+\/members\/[^/]+\/events$/
 const STREAMING_POST_REGEX = /^\/session\/[^/]+\/(?:message|prompt_async)$/
 
 const THRESHOLD_BYTES = 1024
@@ -46,6 +50,7 @@ export const compressionLayer = HttpRouter.middleware<{ handles: unknown }>()((e
 
     const path = pathOf(request.url)
     if (STREAMING_PATHS.has(path)) return response
+    if (request.method === "GET" && STREAMING_GET_REGEX.test(path)) return response
     if (request.method === "POST" && STREAMING_POST_REGEX.test(path)) return response
 
     const contentType = body.contentType

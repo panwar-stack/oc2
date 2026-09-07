@@ -174,6 +174,18 @@ function matchLegacyOpenApi(input: Record<string, unknown>) {
           },
         }
       }
+      if (path.startsWith("/team/") && path.endsWith("/members/{sessionID}/events") && method === "get") {
+        // The PR 2 team member events SSE channel is a raw/streaming route like /event.
+        // Document the wire protocol explicitly so the generated SDK exposes an SSE stream.
+        operation.responses!["200"] = {
+          description: "Team member event stream",
+          content: {
+            "text/event-stream": {
+              schema: { $ref: "#/components/schemas/Event" },
+            },
+          },
+        }
+      }
       const route = `${method.toUpperCase()} ${path}`
       for (const param of operation.parameters ?? []) normalizeParameter(param, route)
     }
@@ -228,10 +240,7 @@ function applyBillingProviderMetadataSchema(spec: OpenApiSpec) {
     completion_tokens_details: nullable(outputDetails),
     cost_details: nullable(costDetails),
   })
-  const iterationFields = numeric([
-    "input_tokens",
-    "output_tokens",
-  ])
+  const iterationFields = numeric(["input_tokens", "output_tokens"])
   iterationFields.cache_creation_input_tokens = nullableNumber
   iterationFields.cache_read_input_tokens = nullableNumber
   const iteration = {

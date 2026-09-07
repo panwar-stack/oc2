@@ -255,13 +255,45 @@ import type {
   TeamGetByIdErrors,
   TeamGetByIdResponses,
   TeamGetErrors,
+  TeamGetMemberContextErrors,
+  TeamGetMemberContextResponses,
   TeamGetResponses,
+  TeamHeartbeatPayload,
+  TeamMemberEventsErrors,
+  TeamMemberEventsResponses,
+  TeamMemberHeartbeatErrors,
+  TeamMemberHeartbeatResponses,
+  TeamMemberPlanErrors,
+  TeamMemberPlanResponses,
+  TeamMemberResultErrors,
+  TeamMemberResultResponses,
+  TeamMessagesAckErrors,
+  TeamMessagesAckResponses,
+  TeamMessagesClaimErrors,
+  TeamMessagesClaimResponses,
   TeamMessagesErrors,
+  TeamMessagesReleaseErrors,
+  TeamMessagesReleaseResponses,
   TeamMessagesResponses,
+  TeamMessagesSendErrors,
+  TeamMessagesSendResponses,
+  TeamPlanPayload,
+  TeamResultPayload,
+  TeamRunMemberErrors,
+  TeamRunMemberResponses,
+  TeamRunPayload,
+  TeamSendMessagePayload,
   TeamShutdownErrors,
   TeamShutdownResponses,
+  TeamTaskClaimErrors,
+  TeamTaskClaimResponses,
   TeamTasksErrors,
   TeamTasksResponses,
+  TeamTaskUpdateErrors,
+  TeamTaskUpdatePayload,
+  TeamTaskUpdateResponses,
+  TeamTranscriptSyncErrors,
+  TeamTranscriptSyncResponses,
   TextPartInput,
   ToolIdsErrors,
   ToolIdsResponses,
@@ -5046,6 +5078,43 @@ export class Team extends HeyApiClient {
   }
 
   /**
+   * Send team message
+   *
+   * Remote mailbox mutation equivalent to sendMessage. The authenticated caller session is the sender.
+   */
+  public messagesSend<ThrowOnError extends boolean = false>(
+    parameters: {
+      teamID: string
+      sessionID: string
+      teamSendMessagePayload?: TeamSendMessagePayload
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "path", key: "teamID" },
+            { in: "query", key: "sessionID" },
+            { key: "teamSendMessagePayload", map: "body" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).post<TeamMessagesSendResponses, TeamMessagesSendErrors, ThrowOnError>({
+      url: "/team/{teamID}/messages",
+      ...options,
+      ...params,
+      headers: {
+        "Content-Type": "application/json",
+        ...options?.headers,
+        ...params.headers,
+      },
+    })
+  }
+
+  /**
    * Shutdown team
    *
    * Shutdown a team and cancel all non-terminal member sessions and tasks. Lead-only. force=true requires a nonblank reason and bypasses the final-report checkpoint.
@@ -5076,6 +5145,498 @@ export class Team extends HeyApiClient {
       url: "/team/{teamID}/shutdown",
       ...options,
       ...params,
+    })
+  }
+
+  /**
+   * Get member pre-run context
+   *
+   * Fetch the role prompt, agent, model, permission, and message history a member process needs before a run.
+   */
+  public getMemberContext<ThrowOnError extends boolean = false>(
+    parameters: {
+      teamID: string
+      path_sessionID: string
+      query_sessionID: string
+      messageID?: string
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "path", key: "teamID" },
+            {
+              in: "path",
+              key: "path_sessionID",
+              map: "sessionID",
+            },
+            {
+              in: "query",
+              key: "query_sessionID",
+              map: "sessionID",
+            },
+            { in: "query", key: "messageID" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).get<
+      TeamGetMemberContextResponses,
+      TeamGetMemberContextErrors,
+      ThrowOnError
+    >({
+      url: "/team/{teamID}/members/{sessionID}/context",
+      ...options,
+      ...params,
+    })
+  }
+
+  /**
+   * Deliver a run request
+   *
+   * Persist a run instruction to a member's mailbox and wake the member. Lead-only; the member process wakes on its SSE events stream.
+   */
+  public runMember<ThrowOnError extends boolean = false>(
+    parameters: {
+      teamID: string
+      path_sessionID: string
+      query_sessionID: string
+      teamRunPayload?: TeamRunPayload
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "path", key: "teamID" },
+            {
+              in: "path",
+              key: "path_sessionID",
+              map: "sessionID",
+            },
+            {
+              in: "query",
+              key: "query_sessionID",
+              map: "sessionID",
+            },
+            { key: "teamRunPayload", map: "body" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).post<TeamRunMemberResponses, TeamRunMemberErrors, ThrowOnError>({
+      url: "/team/{teamID}/members/{sessionID}/run",
+      ...options,
+      ...params,
+      headers: {
+        "Content-Type": "application/json",
+        ...options?.headers,
+        ...params.headers,
+      },
+    })
+  }
+
+  /**
+   * Report member terminal result
+   *
+   * Member reports terminal completion/cancel/failure; the lead settles the member with the existing terminal transaction.
+   */
+  public memberResult<ThrowOnError extends boolean = false>(
+    parameters: {
+      teamID: string
+      path_sessionID: string
+      query_sessionID: string
+      teamResultPayload?: TeamResultPayload
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "path", key: "teamID" },
+            {
+              in: "path",
+              key: "path_sessionID",
+              map: "sessionID",
+            },
+            {
+              in: "query",
+              key: "query_sessionID",
+              map: "sessionID",
+            },
+            { key: "teamResultPayload", map: "body" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).post<TeamMemberResultResponses, TeamMemberResultErrors, ThrowOnError>({
+      url: "/team/{teamID}/members/{sessionID}/result",
+      ...options,
+      ...params,
+      headers: {
+        "Content-Type": "application/json",
+        ...options?.headers,
+        ...params.headers,
+      },
+    })
+  }
+
+  /**
+   * Record member heartbeat
+   *
+   * Refresh a member's daemon_last_active liveness timestamp.
+   */
+  public memberHeartbeat<ThrowOnError extends boolean = false>(
+    parameters: {
+      teamID: string
+      path_sessionID: string
+      query_sessionID: string
+      teamHeartbeatPayload?: TeamHeartbeatPayload
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "path", key: "teamID" },
+            {
+              in: "path",
+              key: "path_sessionID",
+              map: "sessionID",
+            },
+            {
+              in: "query",
+              key: "query_sessionID",
+              map: "sessionID",
+            },
+            { key: "teamHeartbeatPayload", map: "body" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).post<TeamMemberHeartbeatResponses, TeamMemberHeartbeatErrors, ThrowOnError>(
+      {
+        url: "/team/{teamID}/members/{sessionID}/heartbeat",
+        ...options,
+        ...params,
+        headers: {
+          "Content-Type": "application/json",
+          ...options?.headers,
+          ...params.headers,
+        },
+      },
+    )
+  }
+
+  /**
+   * Subscribe to member events
+   *
+   * Server-sent event stream for a member process: run request wake, pause/cancel, new mail, and plan decisions.
+   */
+  public memberEvents<ThrowOnError extends boolean = false>(
+    parameters: {
+      teamID: string
+      path_sessionID: string
+      query_sessionID: string
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "path", key: "teamID" },
+            {
+              in: "path",
+              key: "path_sessionID",
+              map: "sessionID",
+            },
+            {
+              in: "query",
+              key: "query_sessionID",
+              map: "sessionID",
+            },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).sse.get<TeamMemberEventsResponses, TeamMemberEventsErrors, ThrowOnError>({
+      url: "/team/{teamID}/members/{sessionID}/events",
+      ...options,
+      ...params,
+    })
+  }
+
+  /**
+   * Claim pending messages
+   *
+   * Remote mailbox mutation equivalent to claimPendingMessages for the authenticated caller session.
+   */
+  public messagesClaim<ThrowOnError extends boolean = false>(
+    parameters: {
+      teamID: string
+      sessionID: string
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "path", key: "teamID" },
+            { in: "query", key: "sessionID" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).post<TeamMessagesClaimResponses, TeamMessagesClaimErrors, ThrowOnError>({
+      url: "/team/{teamID}/messages/claim",
+      ...options,
+      ...params,
+    })
+  }
+
+  /**
+   * Acknowledge a delivered message
+   *
+   * Remote mailbox mutation equivalent to markMessageDelivered for the authenticated caller session.
+   */
+  public messagesAck<ThrowOnError extends boolean = false>(
+    parameters: {
+      teamID: string
+      messageID: string
+      sessionID: string
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "path", key: "teamID" },
+            { in: "path", key: "messageID" },
+            { in: "query", key: "sessionID" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).post<TeamMessagesAckResponses, TeamMessagesAckErrors, ThrowOnError>({
+      url: "/team/{teamID}/messages/{messageID}/ack",
+      ...options,
+      ...params,
+    })
+  }
+
+  /**
+   * Release a claimed message
+   *
+   * Remote mailbox mutation equivalent to releaseClaimedMessages for the authenticated caller session.
+   */
+  public messagesRelease<ThrowOnError extends boolean = false>(
+    parameters: {
+      teamID: string
+      messageID: string
+      sessionID: string
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "path", key: "teamID" },
+            { in: "path", key: "messageID" },
+            { in: "query", key: "sessionID" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).post<TeamMessagesReleaseResponses, TeamMessagesReleaseErrors, ThrowOnError>(
+      {
+        url: "/team/{teamID}/messages/{messageID}/release",
+        ...options,
+        ...params,
+      },
+    )
+  }
+
+  /**
+   * Claim a team task
+   *
+   * Remote task mutation equivalent to team_task_claim.
+   */
+  public taskClaim<ThrowOnError extends boolean = false>(
+    parameters: {
+      teamID: string
+      taskID: string
+      sessionID: string
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "path", key: "teamID" },
+            { in: "path", key: "taskID" },
+            { in: "query", key: "sessionID" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).post<TeamTaskClaimResponses, TeamTaskClaimErrors, ThrowOnError>({
+      url: "/team/{teamID}/tasks/{taskID}/claim",
+      ...options,
+      ...params,
+    })
+  }
+
+  /**
+   * Update a team task
+   *
+   * Remote task mutation equivalent to team_task_update.
+   */
+  public taskUpdate<ThrowOnError extends boolean = false>(
+    parameters: {
+      teamID: string
+      taskID: string
+      sessionID: string
+      teamTaskUpdatePayload?: TeamTaskUpdatePayload
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "path", key: "teamID" },
+            { in: "path", key: "taskID" },
+            { in: "query", key: "sessionID" },
+            { key: "teamTaskUpdatePayload", map: "body" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).post<TeamTaskUpdateResponses, TeamTaskUpdateErrors, ThrowOnError>({
+      url: "/team/{teamID}/tasks/{taskID}/update",
+      ...options,
+      ...params,
+      headers: {
+        "Content-Type": "application/json",
+        ...options?.headers,
+        ...params.headers,
+      },
+    })
+  }
+
+  /**
+   * Submit or decide a member plan
+   *
+   * Plan-mode submit (member to lead) and decide (lead approve/reject) over the wire. action=submit requires the member session; action=decide requires the lead session.
+   */
+  public memberPlan<ThrowOnError extends boolean = false>(
+    parameters: {
+      teamID: string
+      path_sessionID: string
+      action: "submit" | "decide"
+      query_sessionID: string
+      teamPlanPayload?: TeamPlanPayload
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "path", key: "teamID" },
+            {
+              in: "path",
+              key: "path_sessionID",
+              map: "sessionID",
+            },
+            { in: "path", key: "action" },
+            {
+              in: "query",
+              key: "query_sessionID",
+              map: "sessionID",
+            },
+            { key: "teamPlanPayload", map: "body" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).post<TeamMemberPlanResponses, TeamMemberPlanErrors, ThrowOnError>({
+      url: "/team/{teamID}/members/{sessionID}/plan/{action}",
+      ...options,
+      ...params,
+      headers: {
+        "Content-Type": "application/json",
+        ...options?.headers,
+        ...params.headers,
+      },
+    })
+  }
+
+  /**
+   * Sync member transcript events
+   *
+   * Push member-local session events; the lead replays them into the member session aggregate with the existing projector.
+   */
+  public transcriptSync<ThrowOnError extends boolean = false>(
+    parameters: {
+      teamID: string
+      sessionID: string
+      directory?: string
+      events?: Array<{
+        id: string
+        aggregateID: string
+        seq: number
+        type: string
+        data: {
+          [key: string]: unknown
+        }
+      }>
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "path", key: "teamID" },
+            { in: "query", key: "sessionID" },
+            { in: "body", key: "directory" },
+            { in: "body", key: "events" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).post<TeamTranscriptSyncResponses, TeamTranscriptSyncErrors, ThrowOnError>({
+      url: "/team/{teamID}/transcript/sync",
+      ...options,
+      ...params,
+      headers: {
+        "Content-Type": "application/json",
+        ...options?.headers,
+        ...params.headers,
+      },
     })
   }
 }
