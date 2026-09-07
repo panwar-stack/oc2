@@ -1,9 +1,12 @@
-import { expect } from "bun:test"
+import { afterEach, describe, expect, test } from "bun:test"
 import { Effect, Layer, Context } from "effect"
 import { InstanceRef } from "../../src/effect/instance-ref"
-import { makeRuntime } from "../../src/effect/run-service"
+import { makeRuntime, teamLayerByRole } from "../../src/effect/run-service"
 import { ProjectV2 } from "@oc2-ai/core/project"
 import { it } from "../lib/effect"
+import { Team } from "@/team/team"
+import { TeamRemote } from "@/team/remote"
+import { OC2_PROCESS_ROLE, OC2_TEAM_LEAD_URL } from "@oc2-ai/core/util/opencode-process"
 
 class Shared extends Context.Service<Shared, { readonly id: number }>()("@test/Shared") {}
 const testDirectory = "/tmp/opencode-test"
@@ -87,3 +90,45 @@ it.live("makeRuntime inherits InstanceRef from the current fiber", () =>
     }),
   ),
 )
+
+describe("teamLayerByRole", () => {
+  const originalRole = process.env[OC2_PROCESS_ROLE]
+  const originalLeadURL = process.env[OC2_TEAM_LEAD_URL]
+
+  afterEach(() => {
+    if (originalRole === undefined) delete process.env[OC2_PROCESS_ROLE]
+    else process.env[OC2_PROCESS_ROLE] = originalRole
+    if (originalLeadURL === undefined) delete process.env[OC2_TEAM_LEAD_URL]
+    else process.env[OC2_TEAM_LEAD_URL] = originalLeadURL
+  })
+
+  test("returns the local Team layer when no process role is set", () => {
+    delete process.env[OC2_PROCESS_ROLE]
+    delete process.env[OC2_TEAM_LEAD_URL]
+    expect(teamLayerByRole()).toBe(Team.defaultLayer)
+  })
+
+  test("returns the local Team layer for a main process role", () => {
+    process.env[OC2_PROCESS_ROLE] = "main"
+    delete process.env[OC2_TEAM_LEAD_URL]
+    expect(teamLayerByRole()).toBe(Team.defaultLayer)
+  })
+
+  test("returns the local Team layer for a worker process role", () => {
+    process.env[OC2_PROCESS_ROLE] = "worker"
+    process.env[OC2_TEAM_LEAD_URL] = "http://127.0.0.1:4096"
+    expect(teamLayerByRole()).toBe(Team.defaultLayer)
+  })
+
+  test("returns the local Team layer for a teammate without a lead URL", () => {
+    process.env[OC2_PROCESS_ROLE] = "teammate"
+    delete process.env[OC2_TEAM_LEAD_URL]
+    expect(teamLayerByRole()).toBe(Team.defaultLayer)
+  })
+
+  test("returns the remote Team layer for a teammate with a lead URL", () => {
+    process.env[OC2_PROCESS_ROLE] = "teammate"
+    process.env[OC2_TEAM_LEAD_URL] = "http://127.0.0.1:4096"
+    expect(teamLayerByRole()).toBe(TeamRemote.defaultLayer)
+  })
+})
