@@ -51,7 +51,8 @@ type TeamMessageRow = typeof TeamMessageTable.$inferSelect
 type TeamUsageEventRow = typeof TeamUsageEventTable.$inferSelect
 
 export type Info = TeamRow
-export type Member = Omit<TeamMemberRow, "model" | "dependency_ids" | "result"> & {
+/** Member as visible to tools and callers; excludes the control-plane auth secret. */
+export type Member = Omit<TeamMemberRow, "credential_hash" | "model" | "dependency_ids" | "result"> & {
   model: TeamMemberInsert["model"]
   dependency_ids: TeamMemberInsert["dependency_ids"]
   result: TeamMemberInsert["result"]

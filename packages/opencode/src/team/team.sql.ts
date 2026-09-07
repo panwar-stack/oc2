@@ -47,6 +47,8 @@ export const TeamMemberTable = sqliteTable(
     daemon_error: text(),
     failure_code: text(),
     run_generation: integer().notNull().default(0),
+    /** Per-member credential hash for control-plane Basic auth (multiprocess members). */
+    credential_hash: text(),
     plan_mode: integer({ mode: "boolean" }).notNull().default(false),
     work_mode: text({ enum: ["plan", "implement"] })
       .notNull()

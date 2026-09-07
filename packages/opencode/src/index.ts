@@ -29,6 +29,7 @@ const commandLoaders: CommandLoader[] = [
   { names: ["upgrade"], load: async () => (await import("./cli/cmd/upgrade")).UpgradeCommand },
   { names: ["uninstall"], load: async () => (await import("./cli/cmd/uninstall")).UninstallCommand },
   { names: ["serve"], load: async () => (await import("./cli/cmd/serve")).ServeCommand },
+  { names: ["teammate"], load: async () => (await import("./cli/cmd/teammate")).TeammateCommand },
   { names: ["web"], load: async () => (await import("./cli/cmd/web")).WebCommand },
   { names: ["models"], load: async () => (await import("./cli/cmd/models")).ModelsCommand },
   { names: ["stats"], load: async () => (await import("./cli/cmd/stats")).StatsCommand },

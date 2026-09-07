@@ -46,5 +46,6 @@ export const migrations = (
     import("./migration/20260802120000_add_team_member_run_generation"),
     import("./migration/20260802150000_add_team_revision"),
     import("./migration/20260808000000_drop_stale_session_input_activity"),
+    import("./migration/20260906000000_add_team_member_credential_hash"),
   ])
 ).map((module) => module.default) satisfies DatabaseMigration.Migration[]

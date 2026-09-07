@@ -145,6 +145,7 @@ describe("Config", () => {
       expect(migrated.experimental).toEqual({
         policies: undefined,
         drop_reasoning: true,
+        team_multiprocess: undefined,
       })
       expect(Schema.decodeUnknownSync(Config.Info)(migrated).experimental?.drop_reasoning).toBe(true)
     }),
@@ -160,8 +161,61 @@ describe("Config", () => {
       expect(migrated.experimental).toEqual({
         policies: undefined,
         drop_reasoning: false,
+        team_multiprocess: undefined,
       })
       expect(Schema.decodeUnknownSync(Config.Info)(migrated).experimental?.drop_reasoning).toBe(false)
+    }),
+  )
+
+  it.effect("decodes V1 experimental.team_multiprocess for true, false, and absent", () =>
+    Effect.sync(() => {
+      const decode = (input: object) => Schema.decodeUnknownSync(ConfigV1.Info)(input)
+      expect(decode({ experimental: { team_multiprocess: true } }).experimental?.team_multiprocess).toBe(true)
+      expect(decode({ experimental: { team_multiprocess: false } }).experimental?.team_multiprocess).toBe(false)
+      expect(decode({}).experimental?.team_multiprocess).toBeUndefined()
+      expect(decode({ experimental: { agent_teams: true } }).experimental?.team_multiprocess).toBeUndefined()
+    }),
+  )
+
+  it.effect("decodes V2 experimental.team_multiprocess for true, false, and absent", () =>
+    Effect.sync(() => {
+      const decode = (input: object) => Schema.decodeUnknownSync(Config.Info)(input)
+      expect(decode({ experimental: { team_multiprocess: true } }).experimental?.team_multiprocess).toBe(true)
+      expect(decode({ experimental: { team_multiprocess: false } }).experimental?.team_multiprocess).toBe(false)
+      expect(decode({}).experimental?.team_multiprocess).toBeUndefined()
+      expect(decode({ experimental: { agent_teams: true } }).experimental?.team_multiprocess).toBeUndefined()
+    }),
+  )
+
+  it.effect("migrates V1 experimental.team_multiprocess true without policies into V2 config", () =>
+    Effect.sync(() => {
+      const migrated = ConfigMigrateV1.migrate({
+        snapshot: false,
+        experimental: { team_multiprocess: true },
+      })
+
+      expect(migrated.experimental).toEqual({
+        policies: undefined,
+        drop_reasoning: undefined,
+        team_multiprocess: true,
+      })
+      expect(Schema.decodeUnknownSync(Config.Info)(migrated).experimental?.team_multiprocess).toBe(true)
+    }),
+  )
+
+  it.effect("migrates V1 experimental.team_multiprocess false without policies into V2 config", () =>
+    Effect.sync(() => {
+      const migrated = ConfigMigrateV1.migrate({
+        snapshot: false,
+        experimental: { team_multiprocess: false },
+      })
+
+      expect(migrated.experimental).toEqual({
+        policies: undefined,
+        drop_reasoning: undefined,
+        team_multiprocess: false,
+      })
+      expect(Schema.decodeUnknownSync(Config.Info)(migrated).experimental?.team_multiprocess).toBe(false)
     }),
   )
 

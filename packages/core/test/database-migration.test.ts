@@ -246,6 +246,44 @@ describe("DatabaseMigration", () => {
     )
   })
 
+  test("adds a nullable team member credential_hash and accepts a stored value", async () => {
+    await run(
+      Effect.gen(function* () {
+        const db = yield* makeDb
+        yield* DatabaseMigration.apply(db)
+
+        expect(
+          yield* db.get(
+            sql`SELECT name, dflt_value, "notnull" FROM pragma_table_info('team_member') WHERE name = 'credential_hash'`,
+          ),
+        ).toEqual({ name: "credential_hash", dflt_value: null, notnull: 0 })
+
+        yield* db.run(sql`
+          INSERT INTO team (id, name, goal, lead_session_id, status, time_created, time_updated)
+          VALUES ('team_credential', 't', 'g', 'lead', 'active', 1, 1)
+        `)
+        yield* db.run(sql`
+          INSERT INTO team_member (id, team_id, session_id, name, agent_type, role_prompt, status, lifecycle, plan_mode, work_mode, run_generation, time_created, time_updated)
+          VALUES ('member_credential', 'team_credential', 'ses_credential', 'm', 'general', 'r', 'active', 'task', 0, 'implement', 0, 1, 1)
+        `)
+        expect(
+          yield* db.get(
+            sql`SELECT credential_hash FROM team_member WHERE id = 'member_credential'`,
+          ),
+        ).toEqual({ credential_hash: null })
+
+        yield* db.run(
+          sql`UPDATE team_member SET credential_hash = 'abc123hash' WHERE id = 'member_credential'`,
+        )
+        expect(
+          yield* db.get(
+            sql`SELECT credential_hash FROM team_member WHERE id = 'member_credential'`,
+          ),
+        ).toEqual({ credential_hash: 'abc123hash' })
+      }),
+    )
+  })
+
   test("backfills existing Context Epoch rows to the build agent", async () => {
     await run(
       Effect.gen(function* () {

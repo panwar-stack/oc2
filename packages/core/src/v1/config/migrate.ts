@@ -67,8 +67,14 @@ export function migrate(info: typeof ConfigV1.Info.Type) {
       typeof plugin === "string" ? plugin : { package: plugin[0], options: plugin[1] },
     ),
     experimental:
-      info.experimental?.policies !== undefined || info.experimental?.drop_reasoning !== undefined
-        ? { policies: info.experimental?.policies, drop_reasoning: info.experimental?.drop_reasoning }
+      info.experimental?.policies !== undefined ||
+      info.experimental?.drop_reasoning !== undefined ||
+      info.experimental?.team_multiprocess !== undefined
+        ? {
+            policies: info.experimental?.policies,
+            drop_reasoning: info.experimental?.drop_reasoning,
+            team_multiprocess: info.experimental?.team_multiprocess,
+          }
         : undefined,
     providers: providers(info.provider),
     local_fusion: info.local_fusion,

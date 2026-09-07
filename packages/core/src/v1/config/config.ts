@@ -222,6 +222,9 @@ export const Info = Schema.Struct({
       drop_reasoning: Schema.optional(Schema.Boolean).annotate({
         description: "Drop thinking/reasoning parts from conversation context sent on model requests (default: true)",
       }),
+      team_multiprocess: Schema.optional(Schema.Boolean).annotate({
+        description: "Run agent-team teammates as separate processes (default: false)",
+      }),
     }),
   ),
 }).annotate({ identifier: "Config" })
