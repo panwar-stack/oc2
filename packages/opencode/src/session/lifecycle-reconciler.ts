@@ -20,8 +20,8 @@ import { MessageID, PartID, SessionID } from "@/session/schema"
 import { TeamMemberTable, TeamMessageRecipientTable, TeamMessageTable, TeamTable, TeamTaskTable } from "@/team/team.sql"
 import { bumpTeamRevision } from "@/team/revision"
 import { MemberProcess } from "@/team/member-process"
+import { TeamControlPlane } from "@/team/control-plane"
 import { Config } from "@/config/config"
-import { OC2_TEAM_LEAD_URL } from "@oc2-ai/core/util/opencode-process"
 import { TeamFileOwnershipTable } from "@oc2-ai/core/team/ownership.sql"
 import { TeamEvents } from "@/team/events"
 import type { MemberFailureCode, MemberRunPhase } from "@/team/team"
@@ -955,6 +955,13 @@ export const layer = Layer.effect(
                       output: input.output,
                       ...(input.error ? { error: input.error } : {}),
                       ...(input.failureCode ? { failureCode: input.failureCode } : {}),
+                      // A remote process spawned before the pause stays the durable
+                      // spawn marker, exactly like the terminal write below: dropping
+                      // it here would make a remote member settled while paused
+                      // invisible to the durable lost-member check.
+                      ...(persisted?.remoteSpawnedAt !== undefined
+                        ? { remoteSpawnedAt: persisted.remoteSpawnedAt }
+                        : {}),
                     }),
                     time_updated: Date.now(),
                   })
@@ -1109,6 +1116,16 @@ export const layer = Layer.effect(
                       output: input.output,
                       ...(input.error ? { error: input.error } : {}),
                       ...(effectiveCode ? { failureCode: effectiveCode } : {}),
+                      // A remote process spawned for this generation stays the
+                      // durable spawn marker even after it parks idle: the same
+                      // process keeps beating, so the lost-member check must
+                      // still be able to see it. Dropping the marker here would
+                      // make a daemon that dies after parking undetectable. A
+                      // retry admission builds a fresh generation-2 object and
+                      // intentionally omits it.
+                      ...(persisted?.remoteSpawnedAt !== undefined
+                        ? { remoteSpawnedAt: persisted.remoteSpawnedAt }
+                        : {}),
                     }),
                     time_updated: now,
                   })
@@ -1789,19 +1806,25 @@ export const layer = Layer.effect(
       return output || "(no text result)"
     })
 
-    /** Whether a member should run in a spawned OS process. True only when the
-     * experimental team_multiprocess flag is on, the lead process knows its own
-     * control-plane URL (OC2_TEAM_LEAD_URL), and the member is a finite task
-     * member (daemons keep the in-process path in this slice). */
-    const remoteMemberActive = Effect.fn("LifecycleReconciler.remoteMemberActive")(function* () {
-      const leadURL = process.env[OC2_TEAM_LEAD_URL]
-      if (!leadURL) return false
+    /** True when the opt-in multi-process transport is enabled in config. Read
+     * optionally because the typed start path keeps R=never. */
+    const multiprocessEnabled = Effect.fn("LifecycleReconciler.multiprocessEnabled")(function* () {
       // Config is always present in real assemblies, but the typed start path stays R=never, so
       // read it optionally (same pattern as the optional AgentService below).
       const configService = yield* Effect.serviceOption(Config.Service)
       if (Option.isNone(configService)) return false
       const cfg = yield* configService.value.get()
-      return cfg.experimental?.team_multiprocess === true
+      return TeamControlPlane.isMultiprocessEnabled(cfg)
+    })
+
+    /** Whether a member should run in a spawned OS process. True only when the
+     * experimental team_multiprocess flag is on and the lead process can
+     * resolve its own control-plane URL (OC2_TEAM_LEAD_URL or the last listened
+     * URL). Both finite task members and daemons run remotely in this slice;
+     * retries stay in-process. */
+    const remoteMemberActive = Effect.fn("LifecycleReconciler.remoteMemberActive")(function* () {
+      if (!TeamControlPlane.resolveLeadControlPlaneURL()) return false
+      return yield* multiprocessEnabled()
     })
 
     /**
@@ -1816,9 +1839,22 @@ export const layer = Layer.effect(
     const spawnRemoteMember = Effect.fn("LifecycleReconciler.spawnRemoteMember")(function* (
       prepared: Extract<PrepareResult, { action: "prompt" | "resume" }>,
     ) {
-      const leadURL = process.env[OC2_TEAM_LEAD_URL]!
+      const leadURL = TeamControlPlane.resolveLeadControlPlaneURL()
+      if (!leadURL) throw new Error("Cannot resolve the lead control-plane URL for a remote member")
+      const now = Date.now()
       const secret = MemberProcess.generateSecret()
-      yield* MemberProcess.persistMemberCredentialHash(db, prepared.member.id, MemberProcess.hashSecret(secret))
+      const credentialHash = MemberProcess.hashSecret(secret)
+      yield* MemberProcess.persistMemberCredentialHash(db, prepared.member.id, credentialHash)
+      // Start the liveness clock at spawn. A spawn that never reports a
+      // heartbeat or terminal result is detected as lost after
+      // LOST_MEMBER_TIMEOUT_MS; every heartbeat refreshes this same column.
+      // `remoteSpawnedAt` stays the single-winner spawn marker.
+      yield* db
+        .update(TeamMemberTable)
+        .set({ daemon_last_active: now, time_updated: now })
+        .where(eq(TeamMemberTable.id, prepared.member.id))
+        .run()
+        .pipe(Effect.orDie)
       const directory = yield* InstanceState.directory
       const dbPath = MemberProcess.memberDbPath(directory, prepared.member.session_id)
       yield* Effect.sync(() => MemberProcess.ensureMemberDbDir(dbPath))
@@ -1835,10 +1871,32 @@ export const layer = Layer.effect(
         dbPath,
         configContent: JSON.stringify(config),
         promptID: String(prepared.promptMessageID),
+        lifecycle: prepared.member.lifecycle,
         cwd: directory,
       }).pipe(
         Effect.mapError(
           (error) => new Error(`Failed to spawn remote member ${prepared.member.name}: ${error.message}`),
+        ),
+        // A failed spawn leaves no live process to present the credential, so
+        // clear the hash this attempt wrote before the caller settles the
+        // member cancelled. Best-effort: a clear failure must not mask the
+        // original spawn error. The conditional on `credential_hash` makes a
+        // concurrent retry attempt that already wrote a newer hash safe.
+        Effect.tapError(() =>
+          db
+            .update(TeamMemberTable)
+            .set({ credential_hash: null, time_updated: Date.now() })
+            .where(and(eq(TeamMemberTable.id, prepared.member.id), eq(TeamMemberTable.credential_hash, credentialHash)))
+            .run()
+            .pipe(
+              Effect.orDie,
+              Effect.catchCause((cause) =>
+                Effect.logWarning("failed to clear member credential after spawn failure", {
+                  memberID: prepared.member.id,
+                  cause,
+                }),
+              ),
+            ),
         ),
       )
       // Durable single-winner marker. A retry admission (generation 1 -> 2) rewrites the metadata
@@ -1979,17 +2037,19 @@ export const layer = Layer.effect(
           })
           return "Teammate stopped before starting: missing persisted model."
         }
-        // Remote member-process branch. Finite task members (not daemons) run in a spawned OS
-        // process when the experimental team_multiprocess flag is on and this lead knows its own
-        // control-plane URL. The child fetches context, runs the standard prompt loop against a
-        // local transcript mirror, syncs its session events, and reports the terminal result over
-        // POST /result; the lead-side settleRemoteMember path then owns the durable terminal
-        // transition and the finalization-barrier wake.
+        // Remote member-process branch. Finite task members and daemons run in a
+        // spawned OS process when the experimental team_multiprocess flag is on and this
+        // lead knows its own control-plane URL. The child fetches context, runs the standard
+        // prompt loop against a local transcript mirror, syncs its session events, and
+        // reports the terminal result over POST /result; the lead-side settleRemoteMember path
+        // then owns the durable terminal transition and the finalization-barrier wake. A daemon
+        // child reports its initial idle turn, then parks on the SSE stream and refreshes its
+        // durable liveness clock with heartbeats; the lead detects a daemon that stops beating.
         //
         // A bounded retry (generation 1 -> 2) keeps the in-process completion-only prompt: the
         // retry guidance and task-handoff allow-list already live in this process, the gen-1
         // transcript was synced into the lead DB, and a single extra process hop buys nothing.
-        if (prepared.member.lifecycle !== "daemon" && !prepared.retry && (yield* remoteMemberActive())) {
+        if (!prepared.retry && (yield* remoteMemberActive())) {
           const session = yield* db
             .select()
             .from(SessionTable)
@@ -2565,10 +2625,44 @@ export const layer = Layer.effect(
       const members = (yield* db.select().from(TeamMemberTable).all().pipe(Effect.orDie)).filter((member) =>
         sessionIDs.has(SessionID.make(member.session_id)),
       )
+      const multiprocess = yield* multiprocessEnabled()
       for (const member of members) {
         if (terminalMemberStatuses.includes(member.status as (typeof terminalMemberStatuses)[number])) continue
         const persisted = sessionsByID.get(SessionID.make(member.session_id))
         const fact = persisted ? memberMetadata(persisted) : undefined
+        // Durable lost-member detection for a parked daemon. A daemon that
+        // parks persists metadata state "idle", so this MUST run before the
+        // `fact.state !== "running"` settlement branch below: that branch would
+        // settle and `continue` first, leaving a daemon that dies after parking
+        // idle forever. A healthy parked daemon refreshes `daemon_last_active`
+        // through POST /heartbeat, so a live daemon is never settled lost. The
+        // check is durable across a crashed reconciler because the clock is
+        // persisted; a stale settlement changes nothing because settleMember
+        // guards the run generation.
+        if (
+          multiprocess &&
+          member.lifecycle === "daemon" &&
+          fact?.memberID === member.id &&
+          fact.state !== "running" &&
+          fact.remoteSpawnedAt !== undefined
+        ) {
+          const timeoutMs = TeamControlPlane.resolveLostMemberTimeoutMs()
+          const lastActive = member.daemon_last_active ?? fact.remoteSpawnedAt
+          if (Date.now() - lastActive > timeoutMs) {
+            yield* settleMember({
+              memberID: member.id,
+              state: "cancelled",
+              output: "",
+              error:
+                `Member process for teammate ${member.name} (${member.session_id}) was lost: ` +
+                `no heartbeat for more than ${Math.round(timeoutMs / 1000)}s.`,
+              failureCode: "provider_error",
+              promptMessageID: fact.promptMessageID,
+              generation: fact.generation,
+            })
+            continue
+          }
+        }
         if (fact?.memberID === member.id && fact.state !== "running") {
           const settled = yield* settleMember({
             memberID: member.id,
@@ -2620,6 +2714,37 @@ export const layer = Layer.effect(
             }).pipe(Effect.forkIn(current.scope))
           }
           continue
+        }
+        // Durable lost-member detection for a remote member whose run metadata
+        // is still "running" (a finite member, or a daemon before its initial
+        // idle turn). A process that stops refreshing its liveness clock and
+        // never reports a terminal result is failed by the lead. This adds no
+        // second DB authority and no new poll: it reads the persisted clock on
+        // the existing 500ms reconcile tick and reuses the internal settleMember
+        // transaction, so the terminal row, the single canonical notification,
+        // and the one revision bump stay owned by the same code path.
+        if (
+          multiprocess &&
+          fact?.memberID === member.id &&
+          fact.state === "running" &&
+          fact.remoteSpawnedAt !== undefined
+        ) {
+          const timeoutMs = TeamControlPlane.resolveLostMemberTimeoutMs()
+          const lastActive = member.daemon_last_active ?? fact.remoteSpawnedAt
+          if (Date.now() - lastActive > timeoutMs) {
+            yield* settleMember({
+              memberID: member.id,
+              state: "cancelled",
+              output: "",
+              error:
+                `Member process for teammate ${member.name} (${member.session_id}) was lost: ` +
+                `no heartbeat for more than ${Math.round(timeoutMs / 1000)}s.`,
+              failureCode: "provider_error",
+              promptMessageID: fact.promptMessageID,
+              generation: fact.generation,
+            })
+            continue
+          }
         }
         if (
           (member.status === "starting" || member.status === "blocked" || member.status === "active") &&

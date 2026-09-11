@@ -193,3 +193,19 @@ A reviewer checks the daemon lifecycle (idle between wakes, shutdown cancels), t
 - Transcript sync frequency: end-of-run only (default, matches settlement needs) or periodic mid-run sync for visibility?
 - Should the control-plane endpoints live under the existing `/team` root or a new `/team/v1` root? Default: extend the existing root to avoid a second route tree.
 - Flip `experimental.team_multiprocess` to `true` as the default after PR 5, or keep it opt-in for one release? Default: keep opt-in until the harness is green in CI.
+
+## Decision (PR 5)
+
+Keep `experimental.team_multiprocess` opt-in (`Schema.optional(Schema.Boolean)`, effective default `false`).
+
+Rationale:
+
+- The two-process, two-data-directory harness is the gate for a default flip. The default stays `false` until that harness is green in CI.
+- A `false` or absent flag must keep the current single-process behavior and all current tests unchanged. The remote path is selected only when the flag is exactly `true`.
+- This decision does not change the durable schema or any coordination invariant. It records the default only.
+
+Deferred until the harness is green in CI:
+
+- Flipping the effective default to `true`.
+- Removing the in-process member path.
+- Any TLS, discovery, control-plane failover, or remote file-workspace work.

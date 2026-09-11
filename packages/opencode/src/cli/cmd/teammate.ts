@@ -8,11 +8,14 @@ import { ProviderV2 } from "@oc2-ai/core/provider"
 import { MessageTable, PartTable, SessionTable } from "@oc2-ai/core/session/sql"
 import {
   OC2_PROCESS_ROLE,
+  OC2_TEAM_DAEMON,
   OC2_TEAM_ID,
   OC2_TEAM_LEAD_URL,
+  OC2_TEAM_LIFECYCLE,
   OC2_TEAM_MEMBER_SESSION_ID,
   OC2_TEAM_SECRET,
 } from "@oc2-ai/core/util/opencode-process"
+import { MemberTransport } from "@/team/member-transport"
 import { SessionV1 } from "@oc2-ai/core/v1/session"
 import { asc, eq } from "drizzle-orm"
 import { Cause, Effect, Exit, Option } from "effect"
@@ -55,6 +58,10 @@ type MemberEnv = {
   secret: string
   promptID?: string
   directory: string
+  /** Daemon members park on the SSE stream and serve mailbox wakes instead of
+   * running one finite task. Set by the spawner via `OC2_TEAM_LIFECYCLE=daemon`
+   * (or `OC2_TEAM_DAEMON=1`); defaults to false so the task path is unchanged. */
+  daemon: boolean
 }
 
 type WireModel = { provider_id: string; model_id: string; variant?: string }
@@ -66,6 +73,7 @@ type MemberContext = {
     agent_type: string
     role_prompt: string
     model: WireModel | null
+    lifecycle: string
   }
   session?: {
     agent?: string
@@ -154,6 +162,7 @@ function decodeContext(body: unknown): MemberContext | undefined {
       agent_type: m.agent_type,
       role_prompt: m.role_prompt,
       model: parseModel(m.model),
+      lifecycle: typeof m.lifecycle === "string" ? m.lifecycle : "task",
     },
     ...(sessionCtx
       ? {
@@ -184,6 +193,7 @@ function readMemberEnv(): MemberEnv {
   ]
   const missing = required.filter((name) => !process.env[name])
   if (missing.length > 0) throw new Error(`${logTag}: missing required environment: ${missing.join(", ")}`)
+  const lifecycle = process.env[OC2_TEAM_LIFECYCLE] ?? process.env[OC2_TEAM_DAEMON]
   return {
     leadURL: process.env[OC2_TEAM_LEAD_URL]!,
     teamID: process.env[OC2_TEAM_ID]!,
@@ -191,6 +201,7 @@ function readMemberEnv(): MemberEnv {
     secret: process.env[OC2_TEAM_SECRET]!,
     promptID: process.env[OC2_TEAM_PROMPT_ID],
     directory: process.cwd(),
+    daemon: lifecycle === "daemon" || lifecycle === "1" || lifecycle === "true",
   }
 }
 
@@ -315,7 +326,58 @@ export const TeammateCommand = effectCmd({
     if (!context) {
       return yield* fail(`${logTag}: context response did not match the expected member context shape`)
     }
+    // The env hint wins, but the durable member row is authoritative for
+    // daemon detection so a manually started member cannot skip its lifecycle.
+    const daemon = env.daemon || context.member.lifecycle === "daemon"
 
+    // Heartbeats are liveness transport, started before the run and stopped on
+    // every exit so an idle daemon keeps its durable clock fresh between wakes
+    // and a finite member reports liveness for the duration of its run. No
+    // daemon_state is sent: the member heartbeat is liveness only and must not
+    // change status fields the lead owns.
+    const heartbeat = yield* MemberTransport.startMemberHeartbeat(env)
+    const stopHeartbeat = Effect.sync(() => heartbeat())
+    return yield* Effect.gen(function* () {
+      if (daemon) {
+        // The daemon beats for its whole parked lifetime; it stops with the process.
+        yield* runDaemon(env, ctx, context)
+        return
+      }
+      const result = yield* runMember(env, ctx, context, true)
+      // Stop liveness before reporting the terminal result so no heartbeat races
+      // the terminal settlement. The client is a best-effort fire-and-forget POST.
+      yield* stopHeartbeat
+      return yield* settleAfterRun(env, result)
+    }).pipe(Effect.ensuring(stopHeartbeat))
+  }),
+})
+
+/** Builds the transport connection identity from the validated member env. */
+const transportConfig = (env: MemberEnv): MemberTransport.MemberTransportConfig => ({
+  leadURL: env.leadURL,
+  teamID: env.teamID,
+  sessionID: env.sessionID,
+  secret: env.secret,
+  directory: env.directory,
+})
+
+/**
+ * Hydrates the local transcript mirror and runs one prompt loop to a terminal
+ * assistant turn. `fresh` allows the initial prompt path when the mirror has no
+ * durable user message (the first run of a member session); it is false on
+ * resumed daemon wakes where the mirror already holds the prior turn.
+ */
+const runMember = (
+  env: MemberEnv,
+  ctx: InstanceContext,
+  context: MemberContext,
+  allowFresh: boolean,
+): Effect.Effect<
+  Exit.Exit<SessionV1.WithParts, unknown> | undefined,
+  CliError,
+  Database.Service | SessionPrompt.Service
+> =>
+  Effect.gen(function* () {
     // RESUME vs FRESH: a SessionTable row for the member session in the mirror
     // means a prior run may have hydrated durable rows. Decide after hydration:
     // a genuine resume always has at least the durable user prompt message the
@@ -334,38 +396,96 @@ export const TeammateCommand = effectCmd({
     const mirrorMessages = yield* countMirrorMessages
 
     const prompt = yield* SessionPrompt.Service
-    let result: Exit.Exit<SessionV1.WithParts, unknown>
     if (existing && mirrorMessages > 0) {
-      result = yield* prompt.loop({ sessionID: SessionID.make(env.sessionID) }).pipe(Effect.exit)
-    } else {
-      const agentName = context.session?.agent ?? context.member.agent_type ?? "build"
-      const model = context.session?.model ?? context.member.model
-      result = yield* prompt
-        .prompt({
-          sessionID: SessionID.make(env.sessionID),
-          messageID: env.promptID ? MessageID.make(env.promptID) : MessageID.ascending(),
-          agent: agentName,
-          model: model
-            ? {
-                providerID: ProviderV2.ID.make(model.provider_id),
-                modelID: ModelV2.ID.make(model.model_id),
-              }
-            : undefined,
-          variant: model?.variant,
-          parts: [{ type: "text", text: context.member.role_prompt }],
-        })
-        .pipe(Effect.exit)
+      return yield* prompt.loop({ sessionID: SessionID.make(env.sessionID) }).pipe(Effect.exit)
     }
-    return yield* settleAfterRun(env, result)
-  }),
-})
+    if (!allowFresh) {
+      // A resume with no durable user prompt has no admitted prompt to run, so
+      // there is no turn to settle. The daemon stays parked and keeps beating.
+      return undefined
+    }
+    const agentName = context.session?.agent ?? context.member.agent_type ?? "build"
+    const model = context.session?.model ?? context.member.model
+    return yield* prompt
+      .prompt({
+        sessionID: SessionID.make(env.sessionID),
+        messageID: env.promptID ? MessageID.make(env.promptID) : MessageID.ascending(),
+        agent: agentName,
+        model: model
+          ? {
+              providerID: ProviderV2.ID.make(model.provider_id),
+              modelID: ModelV2.ID.make(model.model_id),
+            }
+          : undefined,
+        variant: model?.variant,
+        parts: [{ type: "text", text: context.member.role_prompt }],
+      })
+      .pipe(Effect.exit)
+  })
 
-/** Converts a run exit into the transcript sync + result report sequence. */
+/**
+ * Daemon lifecycle. The process reports its initial idle state, then parks on
+ * the SSE events stream. A wake (mail, run request, or plan decision) claims
+ * the mailbox and runs the standard prompt loop; between wakes only the
+ * heartbeat keeps the durable liveness clock fresh. The stream exits cleanly on
+ * `team.closed`, on a terminal member event, or on abort (interruption), and
+ * the daemon then stops without reporting a terminal result — the lead owns
+ * daemon settlement.
+ */
+const runDaemon = (
+  env: MemberEnv,
+  ctx: InstanceContext,
+  context: MemberContext,
+): Effect.Effect<void, CliError, Database.Service | SessionPrompt.Service> =>
+  Effect.gen(function* () {
+    // One initial run so the daemon's admission turn reaches a terminal
+    // assistant turn, matching the in-process daemon path.
+    const initial = yield* runMember(env, ctx, context, true)
+    yield* settleAfterRun(env, initial)
+    // A failed or errored initial turn already reported a terminal outcome. The
+    // lead settled the daemon to cancelled, so parking would wait forever on an
+    // event this process missed: exit instead. A successful turn parks below.
+    if (initial !== undefined && Exit.isFailure(initial)) return
+    if (initial !== undefined && Exit.isSuccess(initial)) {
+      const terminal = assistantResult(initial.value.info, initial.value.parts)
+      if (terminal?.state === "error") return
+    }
+
+    const handle = (event: MemberTransport.MemberEvent) =>
+      Effect.gen(function* () {
+        switch (event.type) {
+          case "team.closed":
+            return "stop" as const
+          case "team.member.updated": {
+            const status = event.properties.status
+            return status === "completed" || status === "cancelled" || status === "failed"
+              ? ("stop" as const)
+              : ("continue" as const)
+          }
+          case "team.mail":
+          case "team.run":
+          case "team.wake": {
+            const result = yield* runMember(env, ctx, context, false)
+            yield* settleAfterRun(env, result)
+            return "continue" as const
+          }
+          default:
+            return "continue" as const
+        }
+      })
+
+    yield* MemberTransport.openMemberEventsStream(transportConfig(env), handle)
+  })
+
+/** Converts a run exit into the transcript sync + result report sequence. An
+ * undefined result means there was no admitted turn to run or settle (a daemon
+ * wake with an empty mirror), so the process reports nothing. */
 const settleAfterRun = (
   env: MemberEnv,
-  result: Exit.Exit<SessionV1.WithParts, unknown>,
+  result: Exit.Exit<SessionV1.WithParts, unknown> | undefined,
 ): Effect.Effect<void, CliError, Database.Service> =>
   Effect.gen(function* () {
+    if (result === undefined) return
     if (Exit.isFailure(result)) {
       const cause = result.cause
       // External cancellation/interruption is not an outcome we settle here: the

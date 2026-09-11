@@ -1,5 +1,6 @@
 import { TeamEval } from "@/team/eval"
 import { Team } from "@/team/team"
+import { MemberProcessRegistry } from "@/team/member-process-registry"
 import { TeamMemberTable } from "@/team/team.sql"
 import { Session } from "@/session/session"
 import { LifecycleReconciler } from "@/session/lifecycle-reconciler"
@@ -7,6 +8,7 @@ import { SessionID } from "@/session/schema"
 import { EventV2Bridge } from "@/event-v2-bridge"
 import { EventV2 } from "@oc2-ai/core/event"
 import { Database } from "@oc2-ai/core/database/database"
+import { Log } from "@oc2-ai/core/util/log"
 import * as InstanceState from "@/effect/instance-state"
 import { and, eq } from "drizzle-orm"
 import { Effect, Option, Queue } from "effect"
@@ -27,6 +29,8 @@ import {
   TeamHeartbeatResultSchema,
   TeamMemberResultSchema,
 } from "../groups/team"
+
+const log = Log.create({ service: "server.team" })
 
 const teamRequestError = (message: string) =>
   new TeamRequestError({
@@ -190,11 +194,12 @@ export const teamHandlers = HttpApiBuilder.group(InstanceHttpApi, "team", (handl
       if (Option.isNone(teamInfo) || teamInfo.value.lead_session_id !== ctx.query.sessionID) {
         return yield* new HttpApiError.BadRequest({})
       }
-      // PR 2 transport note: the existing Team.shutdown service already terminates today's
-      // in-process member fibers through SessionRunState cancel. OS-process termination of remote
-      // member processes is intentionally NOT wired here: PR 1 has no spawn registry and member
-      // processes are actually spawned in PR 4. A later PR adds a durable member-process registry
-      // and terminates those processes from this endpoint. The shutdown result shape is unchanged.
+      // The Team.shutdown service terminates in-process member fibers through SessionRunState
+      // cancel. Remote member OS processes additionally need a signal: this lead process tracks
+      // the children it spawned in MemberProcessRegistry and best-effort terminates them after the
+      // durable close commits. The registry is empty when the multi-process flag is off, so this
+      // is a no-op by default. A member running on another VM has no local handle here and exits
+      // through its `team.closed` SSE event; remote kill is intentionally not attempted.
       const result = yield* team
         .shutdown({
           teamID: ctx.params.teamID,
@@ -215,6 +220,16 @@ export const teamHandlers = HttpApiBuilder.group(InstanceHttpApi, "team", (handl
             return Effect.die(error)
           }),
         )
+      // After the durable close and the session-run cancellations succeed, signal the local
+      // member children. Best-effort only: a failed kill leaves the child to observe team.closed.
+      const members = yield* team.getMembers(ctx.params.teamID)
+      // Best-effort kill is observable: the count tells the operator how many local children
+      // received SIGTERM. Remote members are not counted because they have no local handle.
+      const terminated = MemberProcessRegistry.terminateMany(members.map((member) => member.session_id))
+      log.debug("team shutdown terminated local member processes", {
+        teamID: ctx.params.teamID,
+        terminated,
+      })
       return {
         team_id: ctx.params.teamID,
         cancelled_members: result.cancelledMembers,

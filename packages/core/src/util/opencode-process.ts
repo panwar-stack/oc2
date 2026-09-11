@@ -4,6 +4,11 @@ export const OC2_TEAM_LEAD_URL = "OC2_TEAM_LEAD_URL"
 export const OC2_TEAM_ID = "OC2_TEAM_ID"
 export const OC2_TEAM_MEMBER_SESSION_ID = "OC2_TEAM_MEMBER_SESSION_ID"
 export const OC2_TEAM_SECRET = "OC2_TEAM_SECRET"
+/** Optional member lifecycle hint for a spawned teammate process ("task" or
+ * "daemon"). When absent a member process runs the finite task path. */
+export const OC2_TEAM_LIFECYCLE = "OC2_TEAM_LIFECYCLE"
+/** Convenience boolean alias for `OC2_TEAM_LIFECYCLE=daemon`. */
+export const OC2_TEAM_DAEMON = "OC2_TEAM_DAEMON"
 
 export type ProcessRole = "main" | "worker" | "teammate"
 

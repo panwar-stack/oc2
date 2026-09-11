@@ -5,6 +5,7 @@ import { HttpRouter, HttpServer } from "effect/unstable/http"
 import { OpenApi } from "effect/unstable/httpapi"
 import { createServer } from "node:http"
 import { MDNS } from "./mdns"
+import { ServerAddress } from "./address"
 import { HttpApiApp } from "./routes/instance/httpapi/server"
 import { disposeMiddleware } from "./routes/instance/httpapi/lifecycle"
 import { WebSocketTracker } from "./routes/instance/httpapi/websocket-tracker"
@@ -86,6 +87,9 @@ const listenEffect: (opts: ListenOptions) => Effect.Effect<EffectListener, unkno
     const address = yield* tcpAddress(state)
     const listenerUrl = makeURL(opts.hostname, address.port)
     url = listenerUrl
+    // Publish the control-plane URL for same-process lead code (member spawn
+    // resolution). The legacy `url` export above stays for existing callers.
+    ServerAddress.setServerURL(listenerUrl)
 
     const unpublishMdns = yield* setupMdns(opts, address.port, state.scope)
 
@@ -93,7 +97,7 @@ const listenEffect: (opts: ListenOptions) => Effect.Effect<EffectListener, unkno
       hostname: opts.hostname,
       port: address.port,
       url: listenerUrl,
-      stop: yield* makeStop(state, unpublishMdns),
+      stop: yield* makeStop(state, unpublishMdns, listenerUrl),
     }
   },
 )
@@ -168,7 +172,7 @@ function setupMdns(opts: ListenOptions, port: number, scope: Scope.Scope) {
   })
 }
 
-function makeStop(state: ListenerState, unpublishMdns: Effect.Effect<void>) {
+function makeStop(state: ListenerState, unpublishMdns: Effect.Effect<void>, listenerUrl: URL) {
   return Effect.gen(function* () {
     const forceCloseOnce = yield* Effect.cached(forceClose(state).pipe(Effect.ignore))
     const closeScopeOnce = yield* Effect.cached(Scope.close(state.scope, Exit.void).pipe(Effect.ignore))
@@ -178,6 +182,9 @@ function makeStop(state: ListenerState, unpublishMdns: Effect.Effect<void>) {
         yield* unpublishMdns
         if (close) yield* forceCloseOnce
         yield* closeScopeOnce
+        // Clear the address only when this listener is still the published one,
+        // so a newer listener's URL is never erased by a stale stop.
+        if (ServerAddress.url === listenerUrl) ServerAddress.setServerURL(undefined)
       })
   })
 }

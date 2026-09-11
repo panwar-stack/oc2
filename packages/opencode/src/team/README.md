@@ -38,6 +38,9 @@ So when you read the code, do not look for a central "team scheduler" that owns 
 - `src/tool/team_shutdown.ts`: lead-only team shutdown with the optional forced-abort path.
 - `src/team/file-ownership.ts`: canonical exact-file paths, reservation rows, and the structured write lease that guards `write`, `edit`, and `apply_patch`.
 - `src/team/eval.ts`: builds the team evaluation graph, summary counts, and findings.
+- `src/team/member-process.ts`: spawns one headless `teammate` OS process per remote member and builds its environment contract.
+- `src/team/remote.ts`: the remote `Team.Service` client a member process uses to reach the lead control plane.
+- `src/cli/cmd/teammate.ts`: the headless member entry point (fetch context, hydrate the local mirror, run, sync transcript, report result).
 - `src/session/prompt.ts`: prompt loop integration that injects pending team messages.
 - `src/tool/registry.ts`: enables team tools when `experimental.agent_teams` is true.
 
@@ -280,6 +283,68 @@ The actual delivery happens in `SessionPrompt.deliverTeamMessages`:
 So a teammate does not poll for messages. If another participant sends a message, the recipient is woken and sees the message as a normal prompt input on the next loop.
 
 Lead-initiated wake waits are bounded. Lead tools briefly wait for woken teammate runs, while teammate-initiated delivery remains asynchronous so teammate work is not blocked.
+
+## Multi-Process Team Transport
+
+The default team runtime keeps every teammate in the lead OS process. An opt-in second mode runs each teammate in its own headless OS process and connects it to the lead over HTTP and SSE.
+
+The mode is gated by `experimental.team_multiprocess`. The flag defaults to `false`, so absent or `false` reproduces the in-process behavior and existing tests unchanged. The two-process path is opt-in until the multi-process harness is green in CI; no default flip ships in this change.
+
+### Process Model
+
+- **Lead process.** The existing OC2 instance hosts the lead session, the lifecycle reconciler, the control-plane HTTP server, and the authoritative SQLite team store. The lead remains the lifecycle owner and the settle authority.
+- **Member process.** One headless OC2 process per teammate. A member runs the standard `SessionPrompt` loop and the normal tools against a **local transcript mirror** at its own `OC2_DB` path. It never opens the lead database.
+- **Control plane.** The lead server exposes the member HTTP and SSE surface. It is the only bridge between member processes and the authoritative store, and it reuses the existing team service, revision, mailbox, task, and settlement rules.
+
+A member has no shared storage with the lead. Coordination crosses the control plane, and transcript content crosses as JSON session events. Cross-VM deployment is supported when the member host can reach the lead control-plane URL; there is no mDNS discovery, TLS, control-plane failover, or remote file-workspace sync in the first pass.
+
+### Member Environment Contract
+
+The lead builds the member environment at spawn. The contract is:
+
+```txt
+OC2_PROCESS_ROLE=teammate
+OC2_TEAM_LEAD_URL=http://<host>:<port>     # control-plane base URL
+OC2_TEAM_ID=<team id>
+OC2_TEAM_MEMBER_SESSION_ID=<session id>    # authoritative recipient identity
+OC2_TEAM_SECRET=<per-member credential>    # Basic auth to the control plane
+OC2_DB=<member-local sqlite path>          # transcript mirror, never the lead DB
+OC2_CONFIG_CONTENT=<inline config>         # provider/model config for this process
+```
+
+Notes:
+
+- `OC2_TEAM_SECRET` is built as HTTP Basic auth with the username `oc2`. The lead persists only its SHA-256 hash on the `team_member` row; the plaintext secret exists only in the member environment.
+- `OC2_DB` is a per-member path under `<directory>/.oc2/teammates/<sessionID>/oc2.sqlite`. Two members always use different paths, and a member path never equals the lead database path.
+- `OC2_CONFIG_CONTENT` carries the serialized member config, including provider and model definitions. On a separate VM this is how the member host receives provider and model configuration; the member host needs no shared filesystem.
+- A member with a bad or unreachable `OC2_TEAM_LEAD_URL` fails with a typed connection error and exits nonzero. The lead owns the durable terminal state for the member.
+
+### Control-Plane Endpoints
+
+All endpoints mount on the existing `/team` route tree and keep the existing authorization, workspace-routing, revision, and settlement semantics. They add transport, not new business rules.
+
+| Method / Path                                                                                  | Purpose                                                                                                                             |
+| ---------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------- |
+| `GET /team/:teamID/members/:sessionID/context`                                                 | Pre-run fetch: role prompt, agent, model, permission, and message history up to an optional `messageID`.                            |
+| `POST /team/:teamID/members/:sessionID/run`                                                    | Deliver a run request to a member (persisted instruction and wake).                                                                 |
+| `POST /team/:teamID/members/:sessionID/result`                                                 | Member reports terminal completion, cancel, or failure plus a transcript cursor; the lead settles the member.                       |
+| `POST /team/:teamID/members/:sessionID/heartbeat`                                              | Liveness for long daemon idles.                                                                                                     |
+| `GET /team/:teamID/members/:sessionID/events`                                                  | SSE push channel: run request, wake, pause/cancel, new mail, and plan decisions.                                                    |
+| `POST /team/:teamID/messages`, `/messages/claim`, `/messages/:id/ack`, `/messages/:id/release` | Remote mailbox mutations equivalent to `sendMessage`, `claimPendingMessages`, `markMessageDelivered`, and `releaseClaimedMessages`. |
+| `POST /team/:teamID/tasks/:id/claim`, `/tasks/:id/update`                                      | Remote task mutations equivalent to the existing task tools.                                                                        |
+| `POST /team/:teamID/members/:sessionID/plan/:submitOrDecide`                                   | Plan-mode submit and decide over the wire.                                                                                          |
+| `POST /team/:teamID/transcript/sync`                                                           | Push member-local session events; the lead projects them with the existing projector.                                               |
+| `POST /team/:teamID/shutdown`                                                                  | Extend the existing endpoint to also terminate member processes.                                                                    |
+
+### Wake, Heartbeat, And Lost-Member Failure
+
+- A member parks on its SSE stream instead of an in-memory `Deferred`. The stream carries the member's own status transitions, a new-mail wake when the member has pending mailbox rows, keepalive frames, and `team.closed`. A run request and a plan decision reach the member as mailbox wakes. `team.closed` ends the stream.
+- The member reconnects with bounded exponential backoff when the stream drops or closes unexpectedly. Reconnection stops on an aborted run, on `team.closed`, and on a terminal member state.
+- A member sends a heartbeat on a fixed interval while it runs and while a daemon idles. A heartbeat refreshes the member liveness timestamp. It does not change the member lifecycle status, does not bump the team revision, and does not emit a lead notification. The optional `daemon_state`/`daemon_error` payload fields are recorded when supplied for wire compatibility, but the member CLI sends liveness only.
+- The lead records a durable spawn marker on the member session when it starts a member process, and the member liveness clock starts at spawn. A nonterminal member whose liveness clock is older than the lost-member timeout is settled as `cancelled` with failure code `provider_error` and a message that names the lost member process.
+- Lost-member detection is generation-safe and runs inside the existing settle transaction. A terminal member is never re-settled, and a stale marker cannot settle a newer run generation. Detection is durable, so a crashed lead process still recovers the failure on its next reconcile pass.
+
+This is the only liveness model for remote members. There is no extra polling loop beyond the existing reconcile tick, and the lead's finalization barrier is unchanged because member settlement still runs in the lead process.
 
 ## Lead Wait Contract
 

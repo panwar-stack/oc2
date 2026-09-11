@@ -5,11 +5,13 @@ import {
   OC2_PROCESS_ROLE,
   OC2_TEAM_ID,
   OC2_TEAM_LEAD_URL,
+  OC2_TEAM_LIFECYCLE,
   OC2_TEAM_MEMBER_SESSION_ID,
   OC2_TEAM_SECRET,
   sanitizedProcessEnv,
 } from "@oc2-ai/core/util/opencode-process"
 import { TeamMemberTable } from "./team.sql"
+import { MemberProcessRegistry } from "./member-process-registry"
 import { randomBytes } from "crypto"
 import { eq } from "drizzle-orm"
 import { Effect, Schema } from "effect"
@@ -74,6 +76,11 @@ export interface SpawnMemberInput {
   readonly configContent: string
   /** Optional durable admitted prompt message ID (`OC2_TEAM_PROMPT_ID`). */
   readonly promptID?: string
+  /** Optional member lifecycle (`OC2_TEAM_LIFECYCLE`). Set to `"daemon"` so a
+   * spawned daemon parks on the SSE stream after its initial turn instead of
+   * reporting a terminal result. The member CLI also reads the durable member
+   * row, so this is explicit transport metadata, not the only signal. */
+  readonly lifecycle?: "task" | "daemon"
   /** Working directory of the child process. Defaults to the lead's cwd. */
   readonly cwd?: string
 }
@@ -118,6 +125,7 @@ export function memberEnvContract(input: SpawnMemberInput): NodeJS.ProcessEnv {
     [OC2_DB]: input.dbPath,
     [OC2_CONFIG_CONTENT]: input.configContent,
     ...(input.promptID ? { [OC2_TEAM_PROMPT_ID]: input.promptID } : {}),
+    ...(input.lifecycle ? { [OC2_TEAM_LIFECYCLE]: input.lifecycle } : {}),
   })
 }
 
@@ -246,6 +254,9 @@ export const spawnMemberProcess = (input: SpawnMemberInput): Effect.Effect<void,
       proc.once("spawn", () => {
         if (settled) return
         settled = true
+        // Track the handle in the lead process so a later team shutdown can signal it.
+        // Cross-VM members have no handle here and stop through the team.closed event.
+        MemberProcessRegistry.register(input.memberSessionID, proc)
         proc.unref()
         log.debug("member process spawned", {
           memberSessionID: input.memberSessionID,
@@ -269,6 +280,7 @@ export const spawnMemberProcess = (input: SpawnMemberInput): Effect.Effect<void,
         routeStreamLines((line) => log.debug(`member stderr: ${line}`, { memberSessionID: input.memberSessionID })),
       )
       proc.once("exit", (code: number | null, signal: NodeJS.Signals | null) => {
+        MemberProcessRegistry.unregister(input.memberSessionID)
         log.debug("member process exited", {
           memberSessionID: input.memberSessionID,
           code,
