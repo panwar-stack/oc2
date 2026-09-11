@@ -44,6 +44,7 @@ import { SessionRevert } from "@/session/revert"
 import { SessionRunState } from "@/session/run-state"
 import { SessionStatus } from "@/session/status"
 import { SessionSummary } from "@/session/summary"
+import { LifecycleReconciler } from "@/session/lifecycle-reconciler"
 import { Todo } from "@/session/todo"
 import { EventV2Bridge } from "@/event-v2-bridge"
 import { EventV2 } from "@oc2-ai/core/event"
@@ -257,6 +258,7 @@ export function createRoutes(
       EventV2.defaultLayer,
       Skill.defaultLayer,
       Team.defaultLayer,
+      LifecycleReconciler.defaultLayer,
       Todo.defaultLayer,
       ToolRegistry.defaultLayer,
       Vcs.defaultLayer,

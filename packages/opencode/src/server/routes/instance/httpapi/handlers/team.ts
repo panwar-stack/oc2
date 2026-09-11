@@ -2,6 +2,7 @@ import { TeamEval } from "@/team/eval"
 import { Team } from "@/team/team"
 import { TeamMemberTable } from "@/team/team.sql"
 import { Session } from "@/session/session"
+import { LifecycleReconciler } from "@/session/lifecycle-reconciler"
 import { SessionID } from "@/session/schema"
 import { EventV2Bridge } from "@/event-v2-bridge"
 import { EventV2 } from "@oc2-ai/core/event"
@@ -32,9 +33,6 @@ const teamRequestError = (message: string) =>
     name: "TeamRequestError",
     data: { message },
   })
-
-type MemberFailureCode = Team.MemberFailureCode
-type MemberDaemonState = Team.MemberDaemonState
 
 const toMemberModel = (model: Team.Member["model"]) =>
   model == null
@@ -91,18 +89,11 @@ const toMessage = (message: Team.Message) => ({
   time_updated: message.time_updated,
 })
 
-type TeamMemberStatusUpdate = {
-  result?: string
-  failureCode?: MemberFailureCode | null
-  daemonState?: MemberDaemonState | null
-  daemonLastActive?: number | null
-  daemonError?: string | null
-}
-
 export const teamHandlers = HttpApiBuilder.group(InstanceHttpApi, "team", (handlers) =>
   Effect.gen(function* () {
     const team = yield* Team.Service
     const session = yield* Session.Service
+    const reconciler = yield* LifecycleReconciler.Service
 
     const getBySession = Effect.fn("TeamHttpApi.getBySession")(function* (ctx: { query: { sessionID: string } }) {
       const result = yield* team.getByLeadSession(ctx.query.sessionID)
@@ -331,17 +322,50 @@ export const teamHandlers = HttpApiBuilder.group(InstanceHttpApi, "team", (handl
         return yield* teamRequestError(`Caller is not authorized to settle member ${ctx.params.sessionID}`)
       }
       const member = yield* requireMemberOf(ctx.params.teamID, ctx.params.sessionID)
-      const update: TeamMemberStatusUpdate = {}
-      if (ctx.payload.result !== undefined) update.result = ctx.payload.result
-      if (ctx.payload.failure_code !== undefined) update.failureCode = ctx.payload.failure_code
-      const settled = yield* team
-        .updateMemberStatus(member.id, ctx.payload.status, update)
-        .pipe(Effect.map(Option.getOrUndefined))
-      if (!settled) return yield* teamRequestError(`Member ${ctx.params.sessionID} could not be settled`)
+      // Settle through the lifecycle reconciler, which owns the durable member admission
+      // (prompt identity, run generation) and the terminal-transition invariants: exactly one
+      // canonical lead notification and one revision bump per settled generation. The previous
+      // Team.updateMemberStatus path bypassed the member run lifecycle entirely, so a remote
+      // member's completion could never advance dependents or wake the lead.
+      const failure = ctx.payload.failure_code ?? undefined
+      // An explicit result/error override lets a failed or cancelled member process report a
+      // terminal outcome when the extractor finds no durable terminal assistant turn. A completed
+      // report is always settled from the durable extracted transcript, so its result text is not
+      // forwarded as an override.
+      const error =
+        ctx.payload.status === "failed" || ctx.payload.status === "cancelled"
+          ? ctx.payload.result ?? undefined
+          : undefined
+      const settled = yield* reconciler
+        .settleRemoteMember({
+          memberID: member.id,
+          state: ctx.payload.status,
+          result: ctx.payload.result,
+          failureCode: failure,
+          error,
+          transcriptEvents: undefined,
+        })
+        .pipe(
+          Effect.catchTag("LifecycleReconciler.RemoteSettleRejected", (error) =>
+            Effect.fail(teamRequestError(error.message)),
+          ),
+        )
+      if (settled.kind === "missing") {
+        return yield* teamRequestError(`Member ${ctx.params.sessionID} could not be settled`)
+      }
+      if (settled.kind === "extractor-miss") {
+        return yield* teamRequestError("Teammate reported completion but no terminal assistant message was found")
+      }
+      // Every remaining outcome answers with the member's durable status. Re-reading after the
+      // settlement is authoritative: "settled" carries the freshly committed terminal status,
+      // "retry-admitted" leaves the member non-terminal on generation 2 (still active), and
+      // "stale"/"terminal" mean a terminal fact was already committed elsewhere or the write lost
+      // the generation race, so the durable row reports the true state.
+      const current = yield* team.getMemberBySession(member.session_id)
       return {
-        member_id: settled.id,
-        session_id: settled.session_id,
-        status: settled.status,
+        member_id: member.id,
+        session_id: member.session_id,
+        status: Option.isSome(current) ? current.value.status : member.status,
       } satisfies typeof TeamMemberResultSchema.Type
     })
 

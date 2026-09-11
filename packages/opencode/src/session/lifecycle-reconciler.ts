@@ -11,6 +11,7 @@ import {
   SessionTable,
 } from "@oc2-ai/core/session/sql"
 import { SessionV1 } from "@oc2-ai/core/v1/session"
+import { EventV2 } from "@oc2-ai/core/event"
 import type { Interface as AgentInterface } from "@/agent/agent"
 import { InstanceState } from "@/effect/instance-state"
 import { Runner } from "@/effect/runner"
@@ -18,12 +19,15 @@ import { EventV2Bridge } from "@/event-v2-bridge"
 import { MessageID, PartID, SessionID } from "@/session/schema"
 import { TeamMemberTable, TeamMessageRecipientTable, TeamMessageTable, TeamTable, TeamTaskTable } from "@/team/team.sql"
 import { bumpTeamRevision } from "@/team/revision"
+import { MemberProcess } from "@/team/member-process"
+import { Config } from "@/config/config"
+import { OC2_TEAM_LEAD_URL } from "@oc2-ai/core/util/opencode-process"
 import { TeamFileOwnershipTable } from "@oc2-ai/core/team/ownership.sql"
 import { TeamEvents } from "@/team/events"
 import type { MemberFailureCode, MemberRunPhase } from "@/team/team"
 import { Truncate } from "@/tool/truncate"
 import { and, eq, inArray, isNull, notInArray, sql } from "drizzle-orm"
-import { Cause, Context, Deferred, Duration, Effect, Exit, Fiber, Layer, Option, Schedule, Scope } from "effect"
+import { Cause, Context, Deferred, Duration, Effect, Exit, Fiber, Layer, Option, Schedule, Schema, Scope } from "effect"
 
 import type { SessionPrompt } from "./prompt"
 
@@ -81,6 +85,13 @@ type MemberMetadata = {
   output?: string
   error?: string
   failureCode?: string
+  /**
+   * Epoch millis when this generation's remote member process was last spawned.
+   * Present only for remote (multiprocess) members; it is the durable
+   * single-winner guard so a crashed reconciler does not spawn a second OS
+   * process for the same durable generation while the first is expected to run.
+   */
+  remoteSpawnedAt?: number
 }
 
 type State = {
@@ -438,6 +449,48 @@ export function assistantResult(
   return { state: "completed", messageID: info.id, text, valid: text !== "" }
 }
 
+/** Input for {@link Service.Interface.settleRemoteMember}. `state`/`result`/
+ * `failureCode`/`error` are an explicit caller override used when the member
+ * reports a terminal outcome with no durable terminal assistant turn (for
+ * example a failed or cancelled process). `transcriptEvents` are the member's
+ * own session-aggregate events pushed before the result; when present they are
+ * replayed through the lead event store so the durable extractor reads the same
+ * projected rows the local path reads. */
+export type RemoteSettleInput = {
+  readonly memberID: string
+  readonly state?: "completed" | "cancelled" | "failed"
+  readonly result?: string
+  readonly failureCode?: MemberFailureCode
+  readonly error?: string
+  readonly transcriptEvents?: readonly EventV2.SerializedEvent[]
+}
+
+/** Outcome of a remote settlement. `stale` means the settlement did not commit
+ * a terminal transition in this call (the attempted generation did not match
+ * the member's durable generation, or the team was paused and the durable
+ * terminal fact was persisted for settlement after resume); `terminal` means the
+ * member was already terminal and nothing changed; `missing` means no active
+ * team, member, session, or durable admission exists to settle. */
+export type RemoteSettleResult =
+  | { kind: "settled"; status: "completed" | "idle" | "cancelled" | "failed"; messageID: string; generation: number }
+  | { kind: "stale" }
+  | { kind: "terminal" }
+  | { kind: "missing" }
+  /** A bounded generation-1 retry was durably admitted; the remote member runs
+   * the completion-only retry prompt with the returned prompt ID. */
+  | { kind: "retry-admitted"; promptMessageID: MessageID }
+  /** A reported terminal completion has no durable terminal assistant turn. */
+  | { kind: "extractor-miss"; reportedStatus: "completed" }
+
+/** A remote settlement was rejected because the supplied transcript events did
+ * not replay into the member session aggregate (owner or sequence mismatch). */
+export class RemoteSettleRejectedError extends Schema.TaggedErrorClass<RemoteSettleRejectedError>()(
+  "LifecycleReconciler.RemoteSettleRejected",
+  {
+    message: Schema.String,
+  },
+) {}
+
 export interface Interface {
   readonly init: () => Effect.Effect<void>
   readonly attach: (ops: PromptOps) => Effect.Effect<void>
@@ -445,6 +498,7 @@ export interface Interface {
   readonly isPaused: (sessionIDs: readonly string[]) => Effect.Effect<boolean>
   readonly startMember: (input: { memberID: string; ops: PromptOps }) => Effect.Effect<string>
   readonly cancelMember: (input: { memberID: string; ops: PromptOps }) => Effect.Effect<boolean>
+  readonly settleRemoteMember: (input: RemoteSettleInput) => Effect.Effect<RemoteSettleResult, RemoteSettleRejectedError>
   readonly registerBackground: (input: {
     sessionID: string
     parentSessionID: string
@@ -1230,6 +1284,122 @@ export const layer = Layer.effect(
       return settled
     })
 
+    /**
+     * Lead-side settlement of a member that ran in a remote OS process. Replays the member's own
+     * session-aggregate transcript events (when supplied) into the lead event store so the durable
+     * terminal extractor reads the same projected MessageTable/PartTable rows the local path reads,
+     * then runs the SAME internal settleMember transaction. Every existing crash-window invariant
+     * is inherited unchanged: a stale generation changes nothing, a blank generation-2 result
+     * settles cancelled with empty_result, a missing owned-task handoff settles cancelled with
+     * missing_task_handoff, and each terminal transition emits exactly one canonical
+     * `lifecycle:member:<id>:<kind>:<generation>` notification and one team revision bump.
+     *
+     * A caller-provided `state`/`result`/`failureCode`/`error` override is authoritative and lets a
+     * failed or cancelled member process report a terminal outcome when the extractor finds no
+     * durable terminal assistant turn.
+     */
+    const settleRemoteMember = Effect.fn("LifecycleReconciler.settleRemoteMember")(function* (
+      input: RemoteSettleInput,
+    ) {
+      const member = yield* db
+        .select()
+        .from(TeamMemberTable)
+        .where(eq(TeamMemberTable.id, input.memberID))
+        .get()
+        .pipe(Effect.orDie)
+      if (!member) return { kind: "missing" as const }
+      if (terminalMemberStatuses.includes(member.status as (typeof terminalMemberStatuses)[number]))
+        return { kind: "terminal" as const }
+      const team = yield* db.select().from(TeamTable).where(eq(TeamTable.id, member.team_id)).get().pipe(Effect.orDie)
+      if (!team || team.status !== "active") return { kind: "missing" as const }
+      const session = yield* db
+        .select()
+        .from(SessionTable)
+        .where(eq(SessionTable.id, SessionID.make(member.session_id)))
+        .get()
+        .pipe(Effect.orDie)
+      if (!session) return { kind: "missing" as const }
+      const fact = memberMetadata(session)
+      // A remote member that was never durably admitted has no prompt identity or generation to
+      // settle against, so no canonical terminal fact can be written. The handler-side rejection
+      // path (TeamRequestError 400) is the caller's contract for this case.
+      if (!fact || fact.memberID !== member.id || !fact.promptMessageID) return { kind: "missing" as const }
+      const promptMessageID = MessageID.make(fact.promptMessageID)
+      // Replay the member's transcript into the lead event store so the extractor below reads the
+      // projected MessageTable/PartTable rows. A prior /transcript/sync makes this a no-op replay
+      // (same-aggregate already-committed events are idempotent).
+      if (input.transcriptEvents && input.transcriptEvents.length > 0) {
+        const ownerID = yield* InstanceState.workspaceID
+        yield* events
+          .replayAll([...input.transcriptEvents], { ownerID, strictOwner: true })
+          .pipe(
+            Effect.catchDefect((defect) =>
+              defect instanceof EventV2.InvalidSyncEventError
+                ? Effect.fail(new RemoteSettleRejectedError({ message: defect.message }))
+                : Effect.die(defect),
+            ),
+          )
+      }
+      // The durable terminal extractor is authoritative: it runs against the same projected rows
+      // the local path reads, so a completed run whose transcript arrived settles identically
+      // whether it ran in-process or in a remote OS process.
+      const info = yield* latestAssistant(db, member.session_id, String(promptMessageID))
+      const terminal = info ? assistantResult(info) : undefined
+      if (terminal) {
+        const parts = yield* db
+          .select()
+          .from(PartTable)
+          .where(eq(PartTable.message_id, terminal.messageID))
+          .orderBy(PartTable.id)
+          .all()
+          .pipe(
+            Effect.orDie,
+            Effect.map((rows) => rows.map(partRowToPart)),
+          )
+        const text = assistantResult(info, parts)?.text ?? ""
+        const settled = yield* settleMember({
+          memberID: member.id,
+          state: terminal.state === "error" ? "cancelled" : member.lifecycle === "daemon" ? "idle" : "completed",
+          output: text,
+          error: terminal.state === "error" ? text : undefined,
+          failureCode: terminal.state === "error" && member.lifecycle !== "daemon" ? "provider_error" : undefined,
+          promptMessageID: String(promptMessageID),
+          generation: fact.generation,
+        })
+        return settleRemoteOutcome(settled)
+      }
+      // Extractor miss. The caller-provided override lets a failed or cancelled member process
+      // report a terminal outcome with no durable assistant turn; a plain completed report has no
+      // terminal fact to settle against and must re-sync its transcript first.
+      if (input.state === "cancelled" || input.state === "failed") {
+        const settled = yield* settleMember({
+          memberID: member.id,
+          state: input.state,
+          output: input.result ?? "",
+          error: input.error,
+          failureCode: input.failureCode,
+          promptMessageID: String(promptMessageID),
+          generation: fact.generation,
+        })
+        return settleRemoteOutcome(settled)
+      }
+      return { kind: "extractor-miss" as const, reportedStatus: "completed" as const }
+    })
+
+    /** Maps the internal settleMember outcome to the remote-settlement contract. */
+    const settleRemoteOutcome = (settled: MemberSettleOutcome | undefined): RemoteSettleResult => {
+      if (!settled) return { kind: "stale" as const }
+      if (settled.kind === "retry") {
+        return { kind: "retry-admitted" as const, promptMessageID: settled.promptMessageID }
+      }
+      return {
+        kind: "settled" as const,
+        status: settled.state,
+        messageID: settled.messageID,
+        generation: settled.generation,
+      }
+    }
+
     const prepareMember = Effect.fn("LifecycleReconciler.prepareMember")(function* (input: {
       memberID: string
       prepared?: {
@@ -1619,6 +1789,93 @@ export const layer = Layer.effect(
       return output || "(no text result)"
     })
 
+    /** Whether a member should run in a spawned OS process. True only when the
+     * experimental team_multiprocess flag is on, the lead process knows its own
+     * control-plane URL (OC2_TEAM_LEAD_URL), and the member is a finite task
+     * member (daemons keep the in-process path in this slice). */
+    const remoteMemberActive = Effect.fn("LifecycleReconciler.remoteMemberActive")(function* () {
+      const leadURL = process.env[OC2_TEAM_LEAD_URL]
+      if (!leadURL) return false
+      // Config is always present in real assemblies, but the typed start path stays R=never, so
+      // read it optionally (same pattern as the optional AgentService below).
+      const configService = yield* Effect.serviceOption(Config.Service)
+      if (Option.isNone(configService)) return false
+      const cfg = yield* configService.value.get()
+      return cfg.experimental?.team_multiprocess === true
+    })
+
+    /**
+     * Spawns one remote member OS process for a durably admitted run. The
+     * credential secret is generated and its hash persisted on the team_member
+     * row, the member-local mirror directory is ensured, and the process is
+     * spawned detached with the full member env contract. On success the durable
+     * lifecycle metadata records `remoteSpawnedAt` so a crashed reconciler does
+     * not spawn a second process for the same generation. A failed spawn throws
+     * no durable change; the caller decides whether to settle or retry.
+     */
+    const spawnRemoteMember = Effect.fn("LifecycleReconciler.spawnRemoteMember")(function* (
+      prepared: Extract<PrepareResult, { action: "prompt" | "resume" }>,
+    ) {
+      const leadURL = process.env[OC2_TEAM_LEAD_URL]!
+      const secret = MemberProcess.generateSecret()
+      yield* MemberProcess.persistMemberCredentialHash(db, prepared.member.id, MemberProcess.hashSecret(secret))
+      const directory = yield* InstanceState.directory
+      const dbPath = MemberProcess.memberDbPath(directory, prepared.member.session_id)
+      yield* Effect.sync(() => MemberProcess.ensureMemberDbDir(dbPath))
+      // Config is provided at every real assembly boundary (app-runtime, server routes,
+      // bootstrap, tests), but the typed start path stays R=never, so read it optionally.
+      const configService = yield* Effect.serviceOption(Config.Service)
+      const config = Option.isSome(configService) ? yield* configService.value.get() : undefined
+      yield* MemberProcess.spawnMemberProcess({
+        teamID: prepared.team.id,
+        memberSessionID: prepared.member.session_id,
+        memberID: prepared.member.id,
+        leadURL,
+        secret,
+        dbPath,
+        configContent: JSON.stringify(config),
+        promptID: String(prepared.promptMessageID),
+        cwd: directory,
+      }).pipe(
+        Effect.mapError(
+          (error) => new Error(`Failed to spawn remote member ${prepared.member.name}: ${error.message}`),
+        ),
+      )
+      // Durable single-winner marker. A retry admission (generation 1 -> 2) rewrites the metadata
+      // as a fresh retry_admitted object without this field, so the retry generation spawns once
+      // on its own. Settlement to a terminal state rewrites the metadata as terminal.
+      yield* db
+        .transaction(
+          (tx) =>
+            Effect.gen(function* () {
+              const session = yield* tx
+                .select()
+                .from(SessionTable)
+                .where(eq(SessionTable.id, SessionID.make(prepared.member.session_id)))
+                .get()
+              if (!session) return
+              const persisted = memberMetadata(session)
+              if (
+                !persisted ||
+                persisted.memberID !== prepared.member.id ||
+                persisted.promptMessageID !== String(prepared.promptMessageID) ||
+                persisted.generation !== prepared.generation
+              )
+                return
+              yield* tx
+                .update(SessionTable)
+                .set({
+                  metadata: withMemberMetadata(session, { ...persisted, remoteSpawnedAt: Date.now() }),
+                  time_updated: Date.now(),
+                })
+                .where(eq(SessionTable.id, session.id))
+                .run()
+            }),
+          { behavior: "immediate" },
+        )
+        .pipe(Effect.orDie)
+    })
+
     const startMemberWithAdmission: (input: {
       memberID: string
       ops: PromptOps
@@ -1721,6 +1978,52 @@ export const layer = Layer.effect(
             generation: prepared.generation,
           })
           return "Teammate stopped before starting: missing persisted model."
+        }
+        // Remote member-process branch. Finite task members (not daemons) run in a spawned OS
+        // process when the experimental team_multiprocess flag is on and this lead knows its own
+        // control-plane URL. The child fetches context, runs the standard prompt loop against a
+        // local transcript mirror, syncs its session events, and reports the terminal result over
+        // POST /result; the lead-side settleRemoteMember path then owns the durable terminal
+        // transition and the finalization-barrier wake.
+        //
+        // A bounded retry (generation 1 -> 2) keeps the in-process completion-only prompt: the
+        // retry guidance and task-handoff allow-list already live in this process, the gen-1
+        // transcript was synced into the lead DB, and a single extra process hop buys nothing.
+        if (prepared.member.lifecycle !== "daemon" && !prepared.retry && (yield* remoteMemberActive())) {
+          const session = yield* db
+            .select()
+            .from(SessionTable)
+            .where(eq(SessionTable.id, SessionID.make(prepared.member.session_id)))
+            .get()
+            .pipe(Effect.orDie)
+          const persisted = session ? memberMetadata(session) : undefined
+          // Durable single-winner guard: the reconcile poll re-enters this admission every tick
+          // while the member stays active, so a marker already set for this exact generation and
+          // prompt means a child process was started and must not be spawned twice.
+          if (
+            persisted?.memberID === prepared.member.id &&
+            persisted.generation === prepared.generation &&
+            persisted.promptMessageID === String(prepared.promptMessageID) &&
+            persisted.remoteSpawnedAt !== undefined
+          ) {
+            return "Teammate is running in a member process."
+          }
+          const spawned = yield* spawnRemoteMember(prepared).pipe(Effect.exit)
+          if (Exit.isFailure(spawned)) {
+            const cause = Cause.squash(spawned.cause)
+            const message = cause instanceof Error ? cause.message : String(cause)
+            yield* settleMember({
+              memberID: prepared.member.id,
+              state: "cancelled",
+              output: "",
+              error: message,
+              failureCode: "provider_error",
+              promptMessageID: prepared.promptMessageID,
+              generation: prepared.generation,
+            })
+            return `Teammate stopped before starting: ${message}`
+          }
+          return "Teammate started in a member process."
         }
         const model = prepared.member.model
         const result = yield* Effect.gen(function* () {
@@ -2478,6 +2781,7 @@ export const layer = Layer.effect(
       isPaused: (sessionIDs) => activePause(db, sessionIDs),
       startMember,
       cancelMember,
+      settleRemoteMember,
       registerBackground,
       promoteBackground,
       settleBackground,

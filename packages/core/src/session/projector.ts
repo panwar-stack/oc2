@@ -319,12 +319,29 @@ export const layer = Layer.effectDiscard(
       }),
     )
     yield* events.project(SessionV1.Event.Updated, (event) =>
-      db
-        .update(SessionTable)
-        .set(sessionUpdateRow(event.data.info))
-        .where(eq(SessionTable.id, event.data.sessionID))
-        .run()
-        .pipe(Effect.orDie),
+      Effect.gen(function* () {
+        const update = sessionUpdateRow(event.data.info)
+        // Merge metadata instead of replacing it wholesale: a session.updated projected from
+        // another process (for example a teammate transcript sync) only knows the metadata of
+        // its own view, so a replace would erase coordinator-owned keys such as the lifecycle
+        // reconciler's `lifecycleTeamMember` admission that the local process wrote. Incoming
+        // keys win; stored keys absent from the event survive. When the event carries no
+        // metadata field, `sessionUpdateRow` leaves the column untouched (drizzle omits
+        // undefined), matching the prior replace-free behavior for that column.
+        const stored = yield* db
+          .select({ metadata: SessionTable.metadata })
+          .from(SessionTable)
+          .where(eq(SessionTable.id, event.data.sessionID))
+          .get()
+          .pipe(Effect.orDie)
+        const incoming = (event.data.info.metadata ?? {}) as Record<string, unknown>
+        const preserved = (stored?.metadata ?? {}) as Record<string, unknown>
+        const merged = { ...preserved, ...incoming }
+        update.metadata = Object.keys(merged).length > 0 ? merged : null
+        yield* db.update(SessionTable).set(update).where(eq(SessionTable.id, event.data.sessionID)).run().pipe(
+          Effect.orDie,
+        )
+      }),
     )
     yield* events.project(SessionEvent.Moved, (event) =>
       Effect.gen(function* () {

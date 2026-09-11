@@ -1,5 +1,5 @@
 import { Layer, ManagedRuntime } from "effect"
-import { attach } from "./run-service"
+import { attach, teamLayerByRole } from "./run-service"
 import * as Observability from "@oc2-ai/core/effect/observability"
 
 import { FSUtil } from "@oc2-ai/core/fs-util"
@@ -21,7 +21,6 @@ import { Skill } from "@/skill"
 import { Discovery } from "@/skill/discovery"
 import { Question } from "@/question"
 import { Permission } from "@/permission"
-import { Team } from "@/team/team"
 import { Todo } from "@/session/todo"
 import { Session } from "@/session/session"
 import { SessionStatus } from "@/session/status"
@@ -81,7 +80,7 @@ const CoreLayer = Layer.mergeAll(
 
 const SessionLayer = Layer.mergeAll(
   Permission.defaultLayer,
-  Team.defaultLayer,
+  teamLayerByRole(),
   Todo.defaultLayer,
   Session.defaultLayer,
   SessionStatus.defaultLayer,
