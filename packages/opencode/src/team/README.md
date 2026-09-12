@@ -298,6 +298,18 @@ The mode is gated by `experimental.team_multiprocess`. The flag defaults to `fal
 
 A member has no shared storage with the lead. Coordination crosses the control plane, and transcript content crosses as JSON session events. Cross-VM deployment is supported when the member host can reach the lead control-plane URL; there is no mDNS discovery, TLS, control-plane failover, or remote file-workspace sync in the first pass.
 
+### Control-Plane URL Resolution
+
+The lead advertises one control-plane base URL to every spawned member. Resolution has a fixed precedence:
+
+1. An explicit `OC2_TEAM_LEAD_URL` (trimmed, nonempty) always wins. This is the cross-VM override.
+2. Otherwise, the URL published by a real listener: `serve`, `web`, `acp`, or a TUI started with `--port`/`--hostname`/`--mdns`. `Server.listen` prefers `127.0.0.1:4096` when the port is `0` and falls back to an ephemeral port when 4096 is taken.
+3. Otherwise, when `experimental.team_multiprocess` is exactly `true`, the lead starts a loopback control-plane bridge on `127.0.0.1`, preferring port `4096` and falling back to an ephemeral port. This covers the default TUI and default `run` paths, which use the in-process `Server.Default().app.fetch` handler and never call `Server.listen`.
+
+The bridge serves the already-initialized in-process handler; it does not call `Server.listen` and does not build a second service graph, so there is exactly one reconciler loop against the durable store. With the flag absent or `false`, no bridge starts and resolution stays exactly as before, so default-off behavior is unchanged.
+
+When only the loopback bridge exists, the advertised URL is reachable from the same host. A member on another VM still needs an explicit reachable `OC2_TEAM_LEAD_URL`.
+
 ### Member Environment Contract
 
 The lead builds the member environment at spawn. The contract is:

@@ -1819,12 +1819,24 @@ export const layer = Layer.effect(
 
     /** Whether a member should run in a spawned OS process. True only when the
      * experimental team_multiprocess flag is on and the lead process can
-     * resolve its own control-plane URL (OC2_TEAM_LEAD_URL or the last listened
-     * URL). Both finite task members and daemons run remotely in this slice;
-     * retries stay in-process. */
+     * resolve its own control-plane URL (OC2_TEAM_LEAD_URL, a URL published by
+     * `Server.listen`, or the loopback bridge started here). Both finite task
+     * members and daemons run remotely in this slice; retries stay in-process. */
     const remoteMemberActive = Effect.fn("LifecycleReconciler.remoteMemberActive")(function* () {
-      if (!TeamControlPlane.resolveLeadControlPlaneURL()) return false
-      return yield* multiprocessEnabled()
+      if (!(yield* multiprocessEnabled())) return false
+      // A lead that never called `Server.listen` (default TUI and default `run`
+      // use the in-process `Server.Default().app.fetch` handler) still needs a
+      // reachable control plane. Ensure the loopback bridge before resolving so
+      // members get a live URL. An explicit OC2_TEAM_LEAD_URL or a real listener
+      // URL always wins; the bridge only starts when neither is present.
+      if (!TeamControlPlane.resolveLeadControlPlaneURL()) {
+        yield* Effect.promise(() => TeamControlPlane.ensureLeadControlPlaneListener()).pipe(
+          Effect.catchCause((cause) =>
+            Effect.logWarning("failed to expose the lead control plane; members fall back to in-process", { cause }),
+          ),
+        )
+      }
+      return TeamControlPlane.resolveLeadControlPlaneURL() !== undefined
     })
 
     /**

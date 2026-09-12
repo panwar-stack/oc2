@@ -209,3 +209,17 @@ Deferred until the harness is green in CI:
 - Flipping the effective default to `true`.
 - Removing the in-process member path.
 - Any TLS, discovery, control-plane failover, or remote file-workspace work.
+
+## Lead Control-Plane Exposure (Default Resolution)
+
+The lead must always advertise a reachable control-plane URL, even when none is supplied. Resolution order:
+
+1. Explicit `OC2_TEAM_LEAD_URL` (trimmed, nonempty).
+2. The origin published by a real `Server.listen` (`serve`, `web`, `acp`, or TUI with `--port`/`--hostname`/`--mdns`). `Server.listen` prefers port `4096` when the port is `0`, then any free port.
+3. A loopback bridge on `127.0.0.1`, preferring port `4096` and falling back to an ephemeral port. The bridge starts only when `experimental.team_multiprocess === true` and neither of the above exists. It serves the already-initialized in-process `Server.Default().app.fetch` handler and does not call `Server.listen`.
+
+Non-negotiables for this behavior:
+
+- The bridge must reuse the shared module memo map. It must not build a second layer graph or a second `LifecycleReconciler` loop against the same durable store.
+- Returning a default URL must never make `remoteMemberActive` true without a live, reachable listener. The lead resolves only after the controller is listening.
+- The flag absent or `false` must not bind a socket and must keep current behavior and tests unchanged.
