@@ -321,23 +321,30 @@ export const layer = Layer.effectDiscard(
     yield* events.project(SessionV1.Event.Updated, (event) =>
       Effect.gen(function* () {
         const update = sessionUpdateRow(event.data.info)
-        // Merge metadata instead of replacing it wholesale: a session.updated projected from
-        // another process (for example a teammate transcript sync) only knows the metadata of
-        // its own view, so a replace would erase coordinator-owned keys such as the lifecycle
-        // reconciler's `lifecycleTeamMember` admission that the local process wrote. Incoming
-        // keys win; stored keys absent from the event survive. When the event carries no
-        // metadata field, `sessionUpdateRow` leaves the column untouched (drizzle omits
-        // undefined), matching the prior replace-free behavior for that column.
-        const stored = yield* db
-          .select({ metadata: SessionTable.metadata })
-          .from(SessionTable)
-          .where(eq(SessionTable.id, event.data.sessionID))
-          .get()
-          .pipe(Effect.orDie)
-        const incoming = (event.data.info.metadata ?? {}) as Record<string, unknown>
-        const preserved = (stored?.metadata ?? {}) as Record<string, unknown>
-        const merged = { ...preserved, ...incoming }
-        update.metadata = Object.keys(merged).length > 0 ? merged : null
+        // Metadata normally replaces wholesale: a local `PATCH {metadata:{}}` must clear it.
+        // A session.updated projected from another process (a teammate transcript sync) only
+        // knows that process's metadata view, so a wholesale replace would erase the lifecycle
+        // reconciler's coordinator keys (`lifecycleReconciler` / `lifecycleTeamMember`) that the
+        // lead process wrote. Preserve only those coordinator-owned keys across the replace;
+        // every caller-provided key keeps normal replace semantics. When the event carries no
+        // metadata field, `sessionUpdateRow` leaves the column untouched.
+        if (event.data.info.metadata !== undefined) {
+          const stored = yield* db
+            .select({ metadata: SessionTable.metadata })
+            .from(SessionTable)
+            .where(eq(SessionTable.id, event.data.sessionID))
+            .get()
+            .pipe(Effect.orDie)
+          const preserved = (stored?.metadata ?? {}) as Record<string, unknown>
+          const incoming = (event.data.info.metadata ?? {}) as Record<string, unknown>
+          const coordinator: Record<string, unknown> = {}
+          for (const key of ["lifecycleReconciler", "lifecycleTeamMember"]) {
+            if (key in preserved) coordinator[key] = preserved[key]
+          }
+          // Assign the merged object directly so an explicit `{}` still clears user metadata
+          // (coercing an empty object to null would surface as `undefined` on read).
+          update.metadata = { ...coordinator, ...incoming }
+        }
         yield* db.update(SessionTable).set(update).where(eq(SessionTable.id, event.data.sessionID)).run().pipe(
           Effect.orDie,
         )

@@ -1111,6 +1111,71 @@ describe("SessionProjector", () => {
       })
     }),
   )
+  it.effect("replaces session metadata and clears it on an explicit empty update", () =>
+    Effect.gen(function* () {
+      const { db } = yield* Database.Service
+      yield* seedSession(db)
+      const events = yield* EventV2.Service
+      const info = (metadata: Record<string, unknown>) => ({
+        id: sessionID,
+        slug: "test",
+        projectID: Project.ID.global,
+        directory: "/project",
+        title: "test",
+        version: "test",
+        metadata,
+        time: { created: 0, updated: 100 },
+      })
+      yield* events.publish(SessionV1.Event.Updated, { sessionID, info: info({ tags: ["one"], trace: { id: "def" } }) })
+      expect(
+        (yield* db.select().from(SessionTable).where(eq(SessionTable.id, sessionID)).get().pipe(Effect.orDie))?.metadata,
+      ).toEqual({ tags: ["one"], trace: { id: "def" } })
+      // A user metadata update replaces rather than merges, and `{}` clears it.
+      yield* events.publish(SessionV1.Event.Updated, { sessionID, info: info({}) })
+      expect(
+        (yield* db.select().from(SessionTable).where(eq(SessionTable.id, sessionID)).get().pipe(Effect.orDie))?.metadata,
+      ).toEqual({})
+    }),
+  )
+
+  it.effect("preserves coordinator lifecycle metadata across a replace", () =>
+    Effect.gen(function* () {
+      const { db } = yield* Database.Service
+      yield* seedSession(db)
+      yield* db
+        .update(SessionTable)
+        .set({
+          metadata: {
+            lifecycleTeamMember: { kind: "team-member", memberID: "m1", promptMessageID: "p1", state: "running" },
+            userKey: "keep-me-until-replaced",
+          },
+        })
+        .where(eq(SessionTable.id, sessionID))
+        .run()
+        .pipe(Effect.orDie)
+      const events = yield* EventV2.Service
+      // A projection from another process only knows its own metadata view.
+      yield* events.publish(SessionV1.Event.Updated, {
+        sessionID,
+        info: {
+          id: sessionID,
+          slug: "test",
+          projectID: Project.ID.global,
+          directory: "/project",
+          title: "test",
+          version: "test",
+          metadata: { source: "remote" },
+          time: { created: 0, updated: 100 },
+        },
+      })
+      const row = yield* db.select().from(SessionTable).where(eq(SessionTable.id, sessionID)).get().pipe(Effect.orDie)
+      expect(row?.metadata).toEqual({
+        lifecycleTeamMember: { kind: "team-member", memberID: "m1", promptMessageID: "p1", state: "running" },
+        source: "remote",
+      })
+    }),
+  )
+
   it.effect("orders projected messages and context by durable aggregate sequence", () =>
     Effect.gen(function* () {
       const { db } = yield* Database.Service
