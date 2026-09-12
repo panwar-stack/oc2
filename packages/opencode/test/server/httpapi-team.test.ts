@@ -1,12 +1,12 @@
 import { afterEach, describe, expect } from "bun:test"
 import { Database } from "@/storage/db"
 import { Team } from "@/team/team"
-import { TeamTable } from "@/team/team.sql"
+import { TeamMemberTable, TeamTable } from "@/team/team.sql"
 import { InstanceRef } from "@/effect/instance-ref"
 import { SessionID } from "@/session/schema"
 import { SessionTable } from "@oc2-ai/core/session/sql"
 import { eq } from "drizzle-orm"
-import { Effect, Layer, Option } from "effect"
+import { Effect, Layer, Option, Schema } from "effect"
 import { Server } from "../../src/server/server"
 import {
   TeamMessagePaths,
@@ -17,7 +17,17 @@ import {
 } from "../../src/server/routes/instance/httpapi/groups/team"
 import { resetDatabase } from "../fixture/db"
 import { TestInstance } from "../fixture/fixture"
-import { testEffectShared } from "../lib/effect"
+import { testEffect, testEffectShared } from "../lib/effect"
+import { NodeHttpServer } from "@effect/platform-node"
+import { HttpClient, HttpClientRequest, HttpRouter } from "effect/unstable/http"
+import { HttpApi, HttpApiBuilder, HttpApiEndpoint, HttpApiGroup } from "effect/unstable/httpapi"
+import { ServerAuth } from "../../src/server/auth"
+import {
+  Authorization,
+  authorizationLayer,
+  memberCredentialVerifierLayer,
+} from "../../src/server/routes/instance/httpapi/middleware/authorization"
+import { Hash } from "@oc2-ai/core/util/hash"
 
 const it = testEffectShared(Layer.mergeAll(Team.defaultLayer, Database.defaultLayer))
 
@@ -850,6 +860,236 @@ describe("team control-plane HttpApi", () => {
       )
       const foreignBody = yield* responseJson(foreignResponse)
       expectTeamRequestError(foreignResponse, foreignBody)
+    }),
+  )
+})
+
+// ---------------------------------------------------------------------------
+// Defect-1 regression: per-member control-plane credentials.
+// preload.ts deletes OC2_SERVER_PASSWORD/OC2_SERVER_USERNAME for every test, so
+// this suite constructs ServerAuth.Config.layer(...) directly (same pattern as
+// httpapi-authorization.test.ts) instead of relying on the environment. It
+// exercises the real authorization middleware plus the member verifier against
+// seeded `team_member.credential_hash` rows.
+// ---------------------------------------------------------------------------
+
+const CredentialProbeApi = HttpApi.make("test-team-credential").add(
+  HttpApiGroup.make("probe")
+    .add(
+      HttpApiEndpoint.get("member", "/team/:teamID/members/:sessionID/context", {
+        params: { teamID: Schema.String, sessionID: Schema.String },
+        success: Schema.String,
+      }),
+      HttpApiEndpoint.get("messages", "/team/:teamID/messages", {
+        params: { teamID: Schema.String },
+        query: Schema.Struct({ sessionID: Schema.String }),
+        success: Schema.String,
+      }),
+      HttpApiEndpoint.get("probe", "/probe", { success: Schema.String }),
+      HttpApiEndpoint.post("abort", "/session/:sessionID/abort", {
+        params: { sessionID: Schema.String },
+        success: Schema.String,
+      }),
+      HttpApiEndpoint.post("syncHistory", "/sync/history", { success: Schema.String }),
+    )
+    .middleware(Authorization),
+)
+
+const credentialProbeHandlers = HttpApiBuilder.group(CredentialProbeApi, "probe", (handlers) =>
+  handlers
+    .handle("member", () => Effect.succeed("ok"))
+    .handle("messages", () => Effect.succeed("ok"))
+    .handle("probe", () => Effect.succeed("ok"))
+    .handle("abort", () => Effect.succeed("ok"))
+    .handle("syncHistory", () => Effect.succeed("ok")),
+)
+
+const credentialApiLayer = (config: ServerAuth.Info) =>
+  HttpRouter.serve(
+    HttpApiBuilder.layer(CredentialProbeApi).pipe(
+      Layer.provide(credentialProbeHandlers),
+      Layer.provide(authorizationLayer),
+    ),
+    { disableListenLog: true, disableLogger: true },
+  ).pipe(
+    Layer.provideMerge(NodeHttpServer.layerTest),
+    Layer.provide(memberCredentialVerifierLayer),
+    Layer.provide(ServerAuth.Config.layer(config)),
+    Layer.provideMerge(Database.defaultLayer),
+  )
+
+const credentialTeamA = "team_credential_a"
+const credentialTeamB = "team_credential_b"
+const credentialMemberA = "ses_credential_a"
+const credentialMemberB = "ses_credential_b"
+const credentialSecretA = "member-secret-a"
+const credentialSecretB = "member-secret-b"
+
+const seedCredentialMembers = Effect.gen(function* () {
+  const { db } = yield* Database.Service
+  const now = Date.now()
+  yield* db
+    .insert(TeamMemberTable)
+    .values([
+      {
+        id: "tm_credential_a",
+        team_id: credentialTeamA,
+        session_id: credentialMemberA,
+        name: "member-a",
+        agent_type: "general",
+        role_prompt: "a",
+        status: "active",
+        credential_hash: Hash.sha256(credentialSecretA),
+        time_created: now,
+        time_updated: now,
+      },
+      {
+        id: "tm_credential_b",
+        team_id: credentialTeamB,
+        session_id: credentialMemberB,
+        name: "member-b",
+        agent_type: "general",
+        role_prompt: "b",
+        status: "active",
+        credential_hash: Hash.sha256(credentialSecretB),
+        time_created: now,
+        time_updated: now,
+      },
+    ])
+    .onConflictDoNothing()
+    .run()
+    .pipe(Effect.orDie)
+})
+
+const memberBasic = (password: string) => ServerAuth.header({ username: "oc2", password }) ?? ""
+const emptyBasic = () => `Basic ${Buffer.from("oc2:", "utf8").toString("base64")}`
+
+const credentialRequest = (path: string, authorization?: string) =>
+  HttpClientRequest.get(path).pipe(
+    authorization ? HttpClientRequest.setHeader("authorization", authorization) : (request) => request,
+    HttpClient.execute,
+  )
+
+const itSharedCredential = testEffect(credentialApiLayer({ password: Option.some("shared"), username: "oc2" }))
+const itNoSharedPassword = testEffect(credentialApiLayer({ password: Option.none(), username: "opencode" }))
+
+describe("team control-plane member credential authorization", () => {
+  itSharedCredential.live(
+    "authorizes a member secret on its own endpoint and the shared password on the lead path",
+    () =>
+      Effect.gen(function* () {
+        yield* seedCredentialMembers
+        const [own, shared, wrong] = yield* Effect.all(
+          [
+            credentialRequest(
+              `/team/${credentialTeamA}/members/${credentialMemberA}/context`,
+              memberBasic(credentialSecretA),
+            ),
+            credentialRequest("/probe", memberBasic("shared")),
+            credentialRequest(
+              `/team/${credentialTeamA}/members/${credentialMemberA}/context`,
+              memberBasic("wrong-secret"),
+            ),
+          ],
+          { concurrency: "unbounded" },
+        )
+        expect(own.status).toBe(200)
+        expect(shared.status).toBe(200)
+        expect(wrong.status).toBe(401)
+        expect(wrong.headers["www-authenticate"] ?? "").toContain("Basic")
+      }),
+  )
+
+  itSharedCredential.live("rejects a member secret that names another member or team", () =>
+    Effect.gen(function* () {
+      yield* seedCredentialMembers
+      const [otherMember, otherTeam, ownTeamQuery, foreignTeamQuery, emptyPassword] = yield* Effect.all(
+        [
+          credentialRequest(
+            `/team/${credentialTeamA}/members/${credentialMemberB}/context`,
+            memberBasic(credentialSecretA),
+          ),
+          credentialRequest(
+            `/team/${credentialTeamB}/members/${credentialMemberA}/context`,
+            memberBasic(credentialSecretA),
+          ),
+          credentialRequest(
+            `/team/${credentialTeamA}/messages?sessionID=${credentialMemberA}`,
+            memberBasic(credentialSecretA),
+          ),
+          credentialRequest(
+            `/team/${credentialTeamA}/messages?sessionID=${credentialMemberB}`,
+            memberBasic(credentialSecretA),
+          ),
+          credentialRequest(
+            `/team/${credentialTeamA}/messages?sessionID=${credentialMemberA}`,
+            emptyBasic(),
+          ),
+        ],
+        { concurrency: "unbounded" },
+      )
+      expect(otherMember.status).toBe(401)
+      expect(otherTeam.status).toBe(401)
+      expect(ownTeamQuery.status).toBe(200)
+      expect(foreignTeamQuery.status).toBe(401)
+      expect(emptyPassword.status).toBe(401)
+    }),
+  )
+
+  itSharedCredential.live("rejects a team path with no session query", () =>
+    Effect.gen(function* () {
+      yield* seedCredentialMembers
+      const response = yield* credentialRequest(
+        `/team/${credentialTeamA}/messages`,
+        memberBasic(credentialSecretA),
+      )
+      expect(response.status).toBe(401)
+    }),
+  )
+
+  itNoSharedPassword.live("keeps auth disabled when no shared password is configured", () =>
+    Effect.gen(function* () {
+      yield* seedCredentialMembers
+      const [headerless, memberSecret, wrongSecret] = yield* Effect.all(
+        [
+          credentialRequest(`/team/${credentialTeamA}/messages?sessionID=${credentialMemberA}`),
+          credentialRequest(
+            `/team/${credentialTeamA}/messages?sessionID=${credentialMemberA}`,
+            memberBasic(credentialSecretA),
+          ),
+          credentialRequest("/probe", memberBasic("wrong-secret")),
+        ],
+        { concurrency: "unbounded" },
+      )
+      expect(headerless.status).toBe(200)
+      expect(memberSecret.status).toBe(200)
+      expect(wrongSecret.status).toBe(200)
+    }),
+  )
+
+  itSharedCredential.live("scopes a member credential to team and sync routes only", () =>
+    Effect.gen(function* () {
+      yield* seedCredentialMembers
+      const post = (path: string, authorization: string) =>
+        HttpClientRequest.post(path).pipe(
+          HttpClientRequest.setHeader("authorization", authorization),
+          HttpClient.execute,
+        )
+      const [probe, otherAbort, ownAbort, syncHistory] = yield* Effect.all(
+        [
+          credentialRequest("/probe", memberBasic(credentialSecretA)),
+          post("/session/ses_some_other_session/abort", memberBasic(credentialSecretA)),
+          post(`/session/${credentialMemberA}/abort`, memberBasic(credentialSecretA)),
+          post("/sync/history", memberBasic(credentialSecretA)),
+        ],
+        { concurrency: "unbounded" },
+      )
+      // A member credential must not authorize unrelated instance routes, even
+      // its own session's abort; only team routes and the sync endpoints are in scope.
+      expect(probe.status).toBe(401)
+      expect(otherAbort.status).toBe(401)
+      expect(ownAbort.status).toBe(401)
+      expect(syncHistory.status).toBe(200)
     }),
   )
 })

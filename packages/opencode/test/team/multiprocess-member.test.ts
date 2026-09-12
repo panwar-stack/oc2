@@ -21,6 +21,8 @@ import { Team } from "@/team/team"
 import { Truncate } from "@/tool/truncate"
 import { CrossSpawnSpawner } from "@oc2-ai/core/cross-spawn-spawner"
 import { Database } from "@oc2-ai/core/database/database"
+import { TeamMemberTable } from "@/team/team.sql"
+import { eq } from "drizzle-orm"
 import { HttpApiApp } from "../../src/server/routes/instance/httpapi/server"
 import path from "path"
 import { resetDatabase } from "../fixture/db"
@@ -202,6 +204,22 @@ describe("multiprocess teammate member process", () => {
           })
           const current = yield* pollWithTimeout(probe, "member never reached terminal completed", "60 seconds")
           expect(current.status).toBe("completed")
+          // Defect-1 regression: spawn persists the SHA-256 hash of the member
+          // secret on the durable row the control-plane verifier reads. The child
+          // also presents that secret as Basic auth. This test runs with no
+          // shared OC2_SERVER_PASSWORD (preload deletes it), so auth is disabled
+          // here and the control-plane request would be allowed regardless; this
+          // assertion pins the durable verifier input. The httpapi-team
+          // credential suite covers positive/negative verification with a
+          // shared password configured.
+          const { db } = yield* Database.Service
+          const credential = yield* db
+            .select({ credential_hash: TeamMemberTable.credential_hash })
+            .from(TeamMemberTable)
+            .where(eq(TeamMemberTable.id, member.id))
+            .get()
+            .pipe(Effect.orDie)
+          expect(credential?.credential_hash).toMatch(/^[0-9a-f]{64}$/)
 
           // One canonical lifecycle notification and a terminal revision bump.
           const messages = yield* team.getMessages(info.id)
