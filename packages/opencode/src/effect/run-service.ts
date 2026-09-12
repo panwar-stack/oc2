@@ -5,27 +5,10 @@ import * as Observability from "@oc2-ai/core/effect/observability"
 import { WorkspaceContext } from "@/control-plane/workspace-context"
 import type { InstanceContext } from "@/project/instance-context"
 import { memoMap } from "@oc2-ai/core/effect/memo-map"
-import { Team } from "@/team/team"
-import { TeamRemote } from "@/team/remote"
-import { OC2_PROCESS_ROLE, OC2_TEAM_LEAD_URL } from "@oc2-ai/core/util/opencode-process"
 
 type Refs = {
   instance?: InstanceContext
   workspace?: string
-}
-
-/**
- * Selects the Team.Service layer for the current process. A teammate process
- * (OC2_PROCESS_ROLE=teammate) that has a control-plane lead URL always talks to
- * the lead over HTTP through `TeamRemote.defaultLayer`. Every other process
- * (main, worker, or a teammate without a lead URL) keeps the existing local
- * `Team.defaultLayer` path unchanged.
- */
-export function teamLayerByRole(): Layer.Layer<Team.Service> {
-  const role = process.env[OC2_PROCESS_ROLE]
-  const leadURL = process.env[OC2_TEAM_LEAD_URL]
-  if (role !== "teammate" || !leadURL) return Team.defaultLayer
-  return TeamRemote.defaultLayer
 }
 
 export function attachWith<A, E, R>(effect: Effect.Effect<A, E, R>, refs: Refs): Effect.Effect<A, E, R> {

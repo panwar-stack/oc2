@@ -1,7 +1,8 @@
 import { afterEach, describe, expect, test } from "bun:test"
 import { Effect, Layer, Context } from "effect"
 import { InstanceRef } from "../../src/effect/instance-ref"
-import { makeRuntime, teamLayerByRole } from "../../src/effect/run-service"
+import { makeRuntime } from "../../src/effect/run-service"
+import { teamLayerByRole } from "../../src/effect/team-layer"
 import { ProjectV2 } from "@oc2-ai/core/project"
 import { it } from "../lib/effect"
 import { Team } from "@/team/team"
@@ -130,5 +131,22 @@ describe("teamLayerByRole", () => {
     process.env[OC2_PROCESS_ROLE] = "teammate"
     process.env[OC2_TEAM_LEAD_URL] = "http://127.0.0.1:4096"
     expect(teamLayerByRole()).toBe(TeamRemote.defaultLayer)
+  })
+})
+
+describe("module graph", () => {
+  // Regression guard: run-service sits on a cycle with team.ts. Importing team
+  // modules from run-service re-closes the cycle and throws a temporal-dead-zone
+  // ReferenceError while evaluating the session layer. Team layer selection must
+  // stay in the separate team-layer module.
+  test("run-service does not import team modules", async () => {
+    const source = await Bun.file(new URL("../../src/effect/run-service.ts", import.meta.url)).text()
+    expect(source).not.toContain("@/team/team")
+    expect(source).not.toContain("@/team/remote")
+  })
+
+  test("app-runtime evaluates without a temporal-dead-zone error", async () => {
+    const mod = await import("../../src/effect/app-runtime")
+    expect(mod.AppRuntime).toBeDefined()
   })
 })

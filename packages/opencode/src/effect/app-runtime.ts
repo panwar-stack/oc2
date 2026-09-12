@@ -1,5 +1,6 @@
 import { Layer, ManagedRuntime } from "effect"
-import { attach, teamLayerByRole } from "./run-service"
+import { attach } from "./run-service"
+import { teamLayerByRole } from "./team-layer"
 import * as Observability from "@oc2-ai/core/effect/observability"
 
 import { FSUtil } from "@oc2-ai/core/fs-util"
