@@ -327,7 +327,7 @@ OC2_CONFIG_CONTENT=<inline config>         # provider/model config for this proc
 Notes:
 
 - `OC2_TEAM_SECRET` is built as HTTP Basic auth with the username `oc2`. The lead persists only its SHA-256 hash on the `team_member` row; the plaintext secret exists only in the member environment.
-- `OC2_DB` is a per-member path under `<directory>/.oc2/teammates/<sessionID>/oc2.sqlite`. Two members always use different paths, and a member path never equals the lead database path.
+- `OC2_DB` is a per-member path under the lead's data root: `<Global.Path.data>/teammates/<sessionID>/oc2.sqlite`. Two members always use different paths, and a member path never equals the lead database path.
 - `OC2_CONFIG_CONTENT` carries the serialized member config, including provider and model definitions. On a separate VM this is how the member host receives provider and model configuration; the member host needs no shared filesystem.
 - A member with a bad or unreachable `OC2_TEAM_LEAD_URL` fails with a typed connection error and exits nonzero. The lead owns the durable terminal state for the member.
 

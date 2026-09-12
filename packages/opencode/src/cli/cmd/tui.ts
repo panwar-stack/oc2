@@ -24,6 +24,44 @@ declare global {
   const OC2_WORKER_PATH: string
 }
 
+/** Real CLI entrypoint env name for a spawned teammate process. The member
+ * process spawner reads it and it wins over the spawner process's argv[1]. The
+ * team server runs inside this worker thread, whose argv[1] is `worker.ts`
+ * rather than the CLI entry, so without this the spawned member would run
+ * `worker.ts teammate`, never dispatch the `teammate` command, and be settled
+ * as a lost member for lack of a heartbeat. Declared locally because the core
+ * process-role constants file does not export it yet (member-process.ts also
+ * declares it locally). */
+const OC2_CLI_ENTRY = "OC2_CLI_ENTRY"
+
+/** Resolves the real CLI entrypoint of a Bun source checkout. Returns undefined
+ * for a compiled binary (which embeds the teammate command directly). The
+ * inputs are explicit so the worker env contract is unit-testable. */
+export function resolveCliEntrypoint(argv1: string | undefined, execPath: string): string | undefined {
+  const compiled = path.basename(execPath).replace(/\.exe$/, "") !== "bun"
+  if (compiled || !argv1) return undefined
+  return path.resolve(argv1)
+}
+
+/** Builds the TUI worker environment. The resolved CLI entrypoint is forwarded
+ * so a teammate process spawned from the worker dispatches the real CLI. The
+ * value is captured before the handler `chdir`s to the project directory. */
+export function workerEnv(input: { cliEntrypoint?: string; runID: string }): Record<string, string> {
+  const env = sanitizedProcessEnv({
+    [OC2_PROCESS_ROLE]: "worker",
+    [OC2_RUN_ID]: input.runID,
+    ...(input.cliEntrypoint ? { [OC2_CLI_ENTRY]: input.cliEntrypoint } : {}),
+  })
+  // A compiled host must not inherit a source-checkout override from its
+  // parent. Without this delete, sanitizedProcessEnv preserves the ambient
+  // OC2_CLI_ENTRY and the worker can launch the wrong teammate entrypoint.
+  if (!input.cliEntrypoint) delete env[OC2_CLI_ENTRY]
+  return env
+}
+
+/** CLI entrypoint captured at module load, before the handler changes cwd. */
+const cliEntrypoint = resolveCliEntrypoint(process.argv[1], process.execPath)
+
 type RpcClient = ReturnType<typeof Rpc.client<typeof rpc>>
 
 function createWorkerFetch(client: RpcClient): typeof fetch {
@@ -131,10 +169,7 @@ export const TuiThreadCommand = cmd({
         return
       }
       const cwd = Filesystem.resolve(process.cwd())
-      const env = sanitizedProcessEnv({
-        [OC2_PROCESS_ROLE]: "worker",
-        [OC2_RUN_ID]: ensureRunID(),
-      })
+      const env = workerEnv({ cliEntrypoint, runID: ensureRunID() })
 
       const worker = new Worker(file, {
         env,

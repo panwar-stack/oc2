@@ -5,6 +5,7 @@ import { TeamMemberTable, TeamTable } from "@/team/team.sql"
 import { InstanceRef } from "@/effect/instance-ref"
 import { SessionID } from "@/session/schema"
 import { SessionTable } from "@oc2-ai/core/session/sql"
+import { EventTable } from "@oc2-ai/core/event/sql"
 import { eq } from "drizzle-orm"
 import { Effect, Layer, Option, Schema } from "effect"
 import { Server } from "../../src/server/server"
@@ -28,6 +29,13 @@ import {
   memberCredentialVerifierLayer,
 } from "../../src/server/routes/instance/httpapi/middleware/authorization"
 import { Hash } from "@oc2-ai/core/util/hash"
+import { EventV2 } from "@oc2-ai/core/event"
+
+EventV2.define({
+  type: "test.team.transcript",
+  sync: { version: 1, aggregate: "sessionID" },
+  schema: { sessionID: Schema.String, value: Schema.Number },
+})
 
 const it = testEffectShared(Layer.mergeAll(Team.defaultLayer, Database.defaultLayer))
 
@@ -860,6 +868,68 @@ describe("team control-plane HttpApi", () => {
       )
       const foreignBody = yield* responseJson(foreignResponse)
       expectTeamRequestError(foreignResponse, foreignBody)
+    }),
+  )
+
+  it.instance("deduplicates member transcript events and assigns lead sequence numbers", () =>
+    Effect.gen(function* () {
+      const test = yield* TestInstance
+      const team = yield* Team.Service
+      const info = yield* team.create({
+        name: "http-transcript-sequence",
+        goal: "Sync one member aggregate",
+        leadSessionID: "ses_transcript_sequence_lead",
+      })
+      const member = yield* team.addMember({
+        teamID: info.id,
+        sessionID: "ses_transcript_sequence_member",
+        name: "worker",
+        agentType: "general",
+        rolePrompt: "Do the work",
+      })
+      yield* team.updateMemberStatus(member.id, "active")
+      const syncPath = withSession(pathFor(TeamTranscriptSyncPath, { teamID: info.id }), member.session_id)
+      const payload = {
+        directory: test.directory,
+        events: [
+          {
+            id: "evt_http_transcript_sequence_1",
+            aggregateID: member.session_id,
+            seq: 40,
+            type: "test.team.transcript.1",
+            data: { sessionID: member.session_id, value: 1 },
+          },
+          {
+            id: "evt_http_transcript_sequence_2",
+            aggregateID: member.session_id,
+            seq: 41,
+            type: "test.team.transcript.1",
+            data: { sessionID: member.session_id, value: 2 },
+          },
+        ],
+      }
+
+      const firstResponse = yield* postJson(syncPath, payload, test.directory)
+      const firstBody = yield* responseJson(firstResponse)
+      expect(firstResponse.status, JSON.stringify(firstBody)).toBe(200)
+      expect(firstBody).toMatchObject({ sessionID: member.session_id, events: 2, cursor: 1 })
+
+      const secondResponse = yield* postJson(syncPath, payload, test.directory)
+      const secondBody = yield* responseJson(secondResponse)
+      expect(secondResponse.status, JSON.stringify(secondBody)).toBe(200)
+      expect(secondBody).toMatchObject({ sessionID: member.session_id, events: 0, cursor: 1 })
+
+      const { db } = yield* Database.Service
+      const stored = yield* db
+        .select({ id: EventTable.id, seq: EventTable.seq })
+        .from(EventTable)
+        .where(eq(EventTable.aggregate_id, member.session_id))
+        .all()
+        .pipe(Effect.orDie)
+      expect(stored.map((event) => ({ id: String(event.id), seq: event.seq }))).toEqual([
+        { id: "evt_http_transcript_sequence_1", seq: 0 },
+        { id: "evt_http_transcript_sequence_2", seq: 1 },
+      ])
     }),
   )
 })

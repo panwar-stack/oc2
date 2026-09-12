@@ -75,16 +75,17 @@ describe("command", () => {
 
           expect(implementSpecPr.hints).toEqual(["$1", "$2"])
           expect(template).toContain("Read and resolve $1 first. MUST use agent teams.")
+          expect(template).toContain("Record the current branch, status, and committed HEAD as base_sha.")
           expect(template).toContain(
-            "Record the invoking worktree path, status, branch, and committed HEAD as base_sha.",
+            "Create one new branch, if there is no matching branch already with changes per given spec, from base_sha.",
           )
-          expect(template).toContain("Treat it as read only.")
-          expect(template).toContain("Create one external worktree from base_sha.")
           expect(template).toContain("Perform all edits, tests, reviews, and commits there.")
           expect(template).toContain(
-            "Do not modify, merge into, fast forward, rebase, cherry pick, clean, reset, stash, switch, or commit in the invoking worktree.",
+            "If you created a new branch, then treat the current branch as read-only.",
           )
-          expect(template).toContain("Stop if implementation depends on uncommitted source changes there.")
+          expect(template).toContain(
+            "Do not modify, merge into, fast-forward, rebase, cherry-pick, clean, reset, stash, switch, or commit in the original branch.",
+          )
           expect(template).toContain("When PR number - $2 - is provided, implement only that pull request.")
           expect(template).toContain("Otherwise, complete $1 one pull request at a time.")
           expect(template).toContain(
@@ -93,8 +94,6 @@ describe("command", () => {
           expect(template).toContain(
             "Do not implement unrelated work. MUST Audit the full implementation when complete.",
           )
-          expect(template).toContain("Before responding, verify the invoking worktree is unchanged.")
-          expect(template).toContain("Preserve both worktrees.")
           expect(yield* command.get("spec-implement")).toBeUndefined()
 
           const learn = yield* command.get("learn")

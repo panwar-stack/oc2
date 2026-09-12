@@ -329,9 +329,9 @@ describe("PublicApi OpenAPI v2 errors", () => {
       ["post", "/session/{sessionID}/unrevert"],
       ["delete", "/session/{sessionID}/message/{messageID}"],
     ] as const) {
-      expect(componentName(responseRef(spec.paths[route[1]]?.[route[0]]?.responses?.["409"]) ?? "")).toBe(
-        "SessionBusyError",
-      )
+      // `/shell` returns a 409 union (SessionBusyError | SessionPausedError), so
+      // assert containment over anyOf constituents rather than a direct $ref.
+      expect(componentNames(spec.paths[route[1]]?.[route[0]]?.responses?.["409"])).toContain("SessionBusyError")
     }
   })
 

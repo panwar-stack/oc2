@@ -638,49 +638,38 @@ const hydrateContextMessages = (
     }
   })
 
-/** Pushes the mirror EventTable rows the lead has not yet seen, assigning
- * contiguous sequence numbers that start at the lead aggregate tail. Returns
- * the transcript cursor (`leadTail + pushed count`) to report with the result. */
+/** Pushes the member aggregate's mirror rows to the lead. The team endpoint
+ * deduplicates event IDs and assigns lead-local contiguous sequence numbers, so
+ * this process never has to request unrelated aggregate history. */
 const syncTranscript = (env: MemberEnv): Effect.Effect<number, CliError, Database.Service> =>
   Effect.gen(function* () {
     const rows = yield* mirrorEventRows
     if (rows.length === 0) return 0
 
-    // Ask the lead for the aggregate's full history with lastSeq 0. The rows are
-    // EventTable rows; the member aggregate tail is the maximum seq returned.
-    const historyBody: Record<string, number> = { [env.sessionID]: 0 }
-    const history = yield* requestExpectOk(env, `${env.leadURL}/sync/history`, {
-      method: "POST",
-      body: JSON.stringify(historyBody),
-    })
-    const historyRows = Array.isArray(history)
-      ? (history as Array<{
-          id: string
-          aggregate_id: string
-          seq: number
-          type: string
-          data: Record<string, unknown>
-        }>)
-      : []
-    const ownRows = historyRows.filter((row) => row.aggregate_id === env.sessionID)
-    const leadTail = ownRows.reduce((max, row) => (row.seq > max ? row.seq : max), 0)
-    const knownIDs = new Set(ownRows.map((row) => row.id))
-    const fresh = rows.filter((row) => !knownIDs.has(String(row.id)))
-    if (fresh.length === 0) return leadTail
-
-    const events: EventV2.SerializedEvent[] = fresh.map((row, index) => ({
+    const events: EventV2.SerializedEvent[] = rows.map((row) => ({
       id: row.id,
       aggregateID: env.sessionID,
-      seq: leadTail + index + 1,
+      seq: row.seq,
       type: row.type,
       data: row.data,
     }))
     const syncPath = `/team/${encodeURIComponent(env.teamID)}/transcript/sync`
-    yield* requestExpectOk(env, `${env.leadURL}${syncPath}?sessionID=${encodeURIComponent(env.sessionID)}`, {
-      method: "POST",
-      body: JSON.stringify({ directory: env.directory, events }),
-    })
-    return leadTail + events.length
+    const response = yield* requestExpectOk(
+      env,
+      `${env.leadURL}${syncPath}?sessionID=${encodeURIComponent(env.sessionID)}`,
+      {
+        method: "POST",
+        body: JSON.stringify({ directory: env.directory, events }),
+      },
+    )
+    if (
+      typeof response !== "object" ||
+      response === null ||
+      typeof (response as { cursor?: unknown }).cursor !== "number"
+    ) {
+      return yield* fail(`${logTag}: transcript sync response did not include a numeric cursor`)
+    }
+    return (response as { cursor: number }).cursor
   })
 
 /** Reports a terminal outcome to the lead with the transcript cursor. A 2xx

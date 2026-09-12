@@ -14,6 +14,7 @@ import { MessageID, PartID, SessionID } from "@/session/schema"
 import { Session } from "@/session/session"
 import { SessionStatus } from "@/session/status"
 import { Team } from "@/team/team"
+import { MemberUpdated } from "@/team/events"
 import { TeamMemberTable, TeamTable } from "@/team/team.sql"
 import type { TaskPromptOps } from "@/tool/task"
 import { Truncate } from "@/tool/truncate"
@@ -352,6 +353,42 @@ const seedTeam = Effect.fn("LifecycleReconcilerTest.seedTeam")(function* () {
 })
 
 describe("session.lifecycle-reconciler", () => {
+  it.live("publishes the durable active status before member work completes", () =>
+    provideTmpdirInstance(() =>
+      Effect.gen(function* () {
+        const lifecycle = yield* LifecycleReconciler.Service
+        const events = yield* EventV2Bridge.Service
+        const { member } = yield* seedTeam()
+        const promptEntered = yield* Deferred.make<void>()
+        const releasePrompt = yield* Deferred.make<void>()
+        const active = yield* Deferred.make<{ status: string; lifecycle?: string }>()
+        const unsubscribe = yield* events.subscribeCallback(MemberUpdated, (event) => {
+          if (event.properties.sessionID !== member.session_id || event.properties.status !== "active") return
+          Deferred.doneUnsafe(
+            active,
+            Effect.succeed({ status: event.properties.status, lifecycle: event.properties.lifecycle }),
+          )
+        })
+        yield* Effect.addFinalizer(() =>
+          Effect.sync(unsubscribe).pipe(Effect.andThen(Deferred.succeed(releasePrompt, undefined)), Effect.asVoid),
+        )
+        const spy = yield* spyOps({
+          onPrompt: () => Deferred.succeed(promptEntered, undefined).pipe(Effect.andThen(Deferred.await(releasePrompt))),
+        })
+
+        const run = yield* lifecycle.startMember({ memberID: member.id, ops: spy.ops }).pipe(Effect.forkChild)
+        yield* awaitWithTimeout(Deferred.await(promptEntered), "member prompt did not start")
+        expect(yield* awaitWithTimeout(Deferred.await(active), "active member event was not published")).toEqual({
+          status: "active",
+          lifecycle: "task",
+        })
+
+        yield* Deferred.succeed(releasePrompt, undefined)
+        expect(yield* Fiber.join(run)).toBe("done")
+      }),
+    ),
+  )
+
   it.live("restart while paused keeps a background task running and resumes it exactly once after start", () =>
     provideTmpdirInstance(() =>
       Effect.gen(function* () {
@@ -1825,7 +1862,7 @@ describe("session.lifecycle-reconciler", () => {
           const mutableEvents = events as Mutable<EventV2Bridge.Interface>
           const originalPublish = events.publish
           mutableEvents.publish = ((definition, data, options) =>
-            definition.type === "team.member.updated"
+            definition.type === "team.member.updated" && (data as { status?: string }).status === "completed"
               ? Deferred.succeed(entered, undefined).pipe(
                   Effect.andThen(Deferred.await(release)),
                   Effect.andThen(Effect.die(new Error("simulated lifecycle publication failure"))),

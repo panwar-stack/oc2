@@ -7,6 +7,7 @@ import { LifecycleReconciler } from "@/session/lifecycle-reconciler"
 import { SessionID } from "@/session/schema"
 import { EventV2Bridge } from "@/event-v2-bridge"
 import { EventV2 } from "@oc2-ai/core/event"
+import { EventSequenceTable, EventTable } from "@oc2-ai/core/event/sql"
 import { Database } from "@oc2-ai/core/database/database"
 import { Log } from "@oc2-ai/core/util/log"
 import * as InstanceState from "@/effect/instance-state"
@@ -664,23 +665,46 @@ export const teamHandlers = HttpApiBuilder.group(InstanceHttpApi, "team", (handl
       if (events.some((event) => event.aggregateID !== member.session_id)) {
         return yield* teamRequestError("Transcript events must belong to the member session aggregate")
       }
+      const { db } = yield* Database.Service
+      const [existing, sequence] = yield* Effect.all([
+        db
+          .select({ id: EventTable.id })
+          .from(EventTable)
+          .where(eq(EventTable.aggregate_id, member.session_id))
+          .all()
+          .pipe(Effect.orDie),
+        db
+          .select({ seq: EventSequenceTable.seq })
+          .from(EventSequenceTable)
+          .where(eq(EventSequenceTable.aggregate_id, member.session_id))
+          .get()
+          .pipe(Effect.orDie),
+      ])
+      const knownIDs = new Set(existing.map((event) => String(event.id)))
+      const leadTail = sequence?.seq ?? -1
+      const fresh = events
+        .filter((event) => !knownIDs.has(String(event.id)))
+        .map((event, index) => ({ ...event, seq: leadTail + index + 1 }))
       // Replay the member-local session events into the lead's event store, scoped to the member
       // session aggregate. This mirrors the existing /sync/replay handler: strict ownership keeps
       // one workspace from replaying events for an aggregate another workspace owns.
       const bridge = yield* EventV2Bridge.Service
       const ownerID = yield* InstanceState.workspaceID
-      yield* bridge
-        .replayAll(events, { ownerID, strictOwner: true })
-        .pipe(
-          Effect.catchDefect((error) =>
-            error instanceof EventV2.InvalidSyncEventError
-              ? Effect.fail(teamRequestError(`Transcript sync rejected: ${error.message}`))
-              : Effect.die(error),
-          ),
-        )
+      if (fresh.length > 0) {
+        yield* bridge
+          .replayAll(fresh, { ownerID, strictOwner: true })
+          .pipe(
+            Effect.catchDefect((error) =>
+              error instanceof EventV2.InvalidSyncEventError
+                ? Effect.fail(teamRequestError(`Transcript sync rejected: ${error.message}`))
+                : Effect.die(error),
+            ),
+          )
+      }
       return {
         sessionID: member.session_id,
-        events: events.length,
+        events: fresh.length,
+        cursor: leadTail + fresh.length,
       } satisfies typeof TeamTranscriptSyncResultSchema.Type
     })
 

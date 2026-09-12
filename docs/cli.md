@@ -45,6 +45,7 @@ Advanced and integration commands:
   oc2 db path                       Print the database path
   oc2 debug <command>               Run troubleshooting utilities
   oc2 generate                      Generate the repository OpenAPI document
+  oc2 teammate                      Run a headless teammate process (internal; not shown in help)
 
 Global options:
   -h, --help                        Show help

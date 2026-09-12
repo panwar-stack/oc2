@@ -362,6 +362,7 @@ const TeamTranscriptSyncPayload = ReplayPayload
 export const TeamTranscriptSyncResultSchema = Schema.Struct({
   sessionID: Schema.String,
   events: Schema.Number,
+  cursor: Schema.Number,
 }).annotate({ identifier: "TeamTranscriptSyncResult" })
 
 export const TeamQuery = Schema.Struct({

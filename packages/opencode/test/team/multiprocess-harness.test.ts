@@ -25,6 +25,7 @@ import { MemberProcess } from "@/team/member-process"
 import { Truncate } from "@/tool/truncate"
 import { CrossSpawnSpawner } from "@oc2-ai/core/cross-spawn-spawner"
 import { Database } from "@oc2-ai/core/database/database"
+import { Global } from "@oc2-ai/core/global"
 import { Naming } from "@oc2-ai/core/naming"
 import { HttpApiApp } from "../../src/server/routes/instance/httpapi/server"
 import { resetDatabase } from "../fixture/db"
@@ -215,15 +216,17 @@ describe.skipIf(process.platform === "win32")("multiprocess two-process harness"
 
           // The two members must use separate transcript-mirror databases and
           // neither may be the lead DB. The spawner computes both paths from the
-          // instance directory; the assertions below verify the files exist.
-          const taskMirror = MemberProcess.memberDbPath(dir, taskSession.id)
-          const daemonMirror = MemberProcess.memberDbPath(dir, daemonSession.id)
+          // lead's data root; the assertions below verify the files exist.
+          const taskMirror = MemberProcess.memberDbPath(taskSession.id)
+          const daemonMirror = MemberProcess.memberDbPath(daemonSession.id)
           const leadDb = Database.path()
           expect(taskMirror).not.toBe(daemonMirror)
           expect(taskMirror).not.toBe(leadDb)
           expect(daemonMirror).not.toBe(leadDb)
-          expect(taskMirror).toContain(path.join(".oc2", MemberProcess.TEAMMATE_DATA_SUBDIR))
-          expect(daemonMirror).toContain(path.join(".oc2", MemberProcess.TEAMMATE_DATA_SUBDIR))
+          expect(taskMirror).toContain(path.join(Global.Path.data, MemberProcess.TEAMMATE_DATA_SUBDIR))
+          expect(daemonMirror).toContain(path.join(Global.Path.data, MemberProcess.TEAMMATE_DATA_SUBDIR))
+          expect(taskMirror).not.toContain(path.join(dir, ".oc2"))
+          expect(daemonMirror).not.toContain(path.join(dir, ".oc2"))
 
           // The mock LLM answers each child's model call. Match on the
           // distinctive role prompt text, which stays in the conversation on the

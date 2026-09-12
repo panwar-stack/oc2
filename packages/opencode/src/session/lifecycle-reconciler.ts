@@ -414,6 +414,8 @@ export type PrepareResult =
       generation: number
       retry: boolean
       phase: MemberRunPhase
+      /** True when this preparation committed a member lifecycle transition. */
+      activated: boolean
       dependencyContext?: string
     }
 
@@ -1593,6 +1595,7 @@ export const layer = Layer.effect(
                     generation,
                     retry,
                     phase,
+                    activated: false,
                   }
                 }
               }
@@ -1664,6 +1667,7 @@ export const layer = Layer.effect(
                 generation,
                 retry,
                 phase,
+                activated: true,
                 ...(input.prepared ? { dependencyContext: input.prepared.dependencyContext } : {}),
               }
             }),
@@ -1868,7 +1872,7 @@ export const layer = Layer.effect(
         .run()
         .pipe(Effect.orDie)
       const directory = yield* InstanceState.directory
-      const dbPath = MemberProcess.memberDbPath(directory, prepared.member.session_id)
+      const dbPath = MemberProcess.memberDbPath(prepared.member.session_id)
       yield* Effect.sync(() => MemberProcess.ensureMemberDbDir(dbPath))
       // Config is provided at every real assembly boundary (app-runtime, server routes,
       // bootstrap, tests), but the typed start path stays R=never, so read it optionally.
@@ -2037,6 +2041,28 @@ export const layer = Layer.effect(
         // member's model work to finish.
         admissionOutcome = { _tag: "admitted", generation: prepared.generation }
         yield* notifyAdmission(admissionOutcome)
+        // Remote member sessions run in another process, so their process-local
+        // session.status events never reach the lead TUI. Publish the durable
+        // starting/blocked -> active transition here. Local members also get the
+        // same authoritative team status, while no-op resumes stay silent.
+        if (prepared.activated) {
+          yield* events
+            .publish(TeamEvents.memberUpdated, {
+              memberID: prepared.member.id,
+              sessionID: prepared.member.session_id,
+              status: "active",
+              lifecycle: prepared.member.lifecycle,
+              daemonState: prepared.member.lifecycle === "daemon" ? "running" : undefined,
+            })
+            .pipe(
+              Effect.catchCause((cause) =>
+                Effect.logWarning("team member activation event publish failed", {
+                  memberID: prepared.member.id,
+                  cause,
+                }),
+              ),
+            )
+        }
         if (!prepared.member.model) {
           yield* settleMember({
             memberID: prepared.member.id,
@@ -2637,7 +2663,12 @@ export const layer = Layer.effect(
       const members = (yield* db.select().from(TeamMemberTable).all().pipe(Effect.orDie)).filter((member) =>
         sessionIDs.has(SessionID.make(member.session_id)),
       )
-      const multiprocess = yield* multiprocessEnabled()
+      // Resolve the opt-in transport flag only when there are members to inspect.
+      // `multiprocessEnabled` reads the scoped Config service; reading it on every
+      // 500ms tick even for a member-less project adds a scoped lookup that an
+      // instance disposal can interrupt mid-reconcile. The flag is only consulted
+      // inside the loop below, so skip the read when the loop cannot run.
+      const multiprocess = members.length > 0 ? yield* multiprocessEnabled() : false
       for (const member of members) {
         if (terminalMemberStatuses.includes(member.status as (typeof terminalMemberStatuses)[number])) continue
         const persisted = sessionsByID.get(SessionID.make(member.session_id))

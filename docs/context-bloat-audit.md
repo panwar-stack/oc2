@@ -8,14 +8,14 @@ Remove duplicate dynamic content first. Do not start with dynamic tool filtering
 
 ## Measurements
 
-| Source | Size | Frequency and effect |
-| --- | ---: | --- |
-| Tool result | Up to 50 KiB, about 12.8K tokens | Replayed until prune or compaction |
-| Team tool block | 40-45 KB, about 10-11K tokens | Present on every request, but usually cacheable |
-| Team lead system | About 9 KB | Present on every lead request |
-| Applicable `AGENTS.md` | Up to 24,679 B | Added when applicable |
-| Teammate bootstrap | 3,512 B plus role and team data | Added for each teammate |
-| Loaded skill body | Up to 13,000 B | Added after skill load |
+| Source                 |                             Size | Frequency and effect                            |
+| ---------------------- | -------------------------------: | ----------------------------------------------- |
+| Tool result            | Up to 50 KiB, about 12.8K tokens | Replayed until prune or compaction              |
+| Team tool block        |    40-45 KB, about 10-11K tokens | Present on every request, but usually cacheable |
+| Team lead system       |                       About 9 KB | Present on every lead request                   |
+| Applicable `AGENTS.md` |                   Up to 24,679 B | Added when applicable                           |
+| Teammate bootstrap     |  3,512 B plus role and team data | Added for each teammate                         |
+| Loaded skill body      |                   Up to 13,000 B | Added after skill load                          |
 
 Caching lowers cost and latency. It does not lower context-window use.
 
@@ -67,12 +67,12 @@ Ranked in recommended implementation order:
 
 Provider confidence:
 
-| Provider path | Confidence |
-| --- | --- |
-| Direct Anthropic | Strongest |
-| Direct OpenAI | Strongest |
-| Bedrock | Replay evidence is missing |
-| Gemini | Evidence is implicit; no positive replay exists |
+| Provider path    | Confidence                                      |
+| ---------------- | ----------------------------------------------- |
+| Direct Anthropic | Strongest                                       |
+| Direct OpenAI    | Strongest                                       |
+| Bedrock          | Replay evidence is missing                      |
+| Gemini           | Evidence is implicit; no positive replay exists |
 
 ## Reject or Defer
 
@@ -103,14 +103,14 @@ These changes do not reduce model context:
 
 ## Audit Checks
 
-| Check | Result |
-| --- | ---: |
-| Core focused tests | 15 passed |
-| Legacy retry and pagination tests | 115 passed |
-| TUI v2 sync tests | 17 passed |
-| Source, test, provider, cache, and prompt inspection | Targeted inspection completed |
-| Git status | Clean |
-| Full suite | Not run because the audit was read-only |
+| Check                                                |                                  Result |
+| ---------------------------------------------------- | --------------------------------------: |
+| Core focused tests                                   |                               15 passed |
+| Legacy retry and pagination tests                    |                              115 passed |
+| TUI v2 sync tests                                    |                               17 passed |
+| Source, test, provider, cache, and prompt inspection |           Targeted inspection completed |
+| Git status                                           |                                   Clean |
+| Full suite                                           | Not run because the audit was read-only |
 
 ## Recommended First Batch
 

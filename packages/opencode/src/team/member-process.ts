@@ -1,4 +1,5 @@
 import { Database } from "@oc2-ai/core/database/database"
+import { Global } from "@oc2-ai/core/global"
 import { Hash } from "@oc2-ai/core/util/hash"
 import * as Log from "@oc2-ai/core/util/log"
 import {
@@ -32,7 +33,7 @@ export const OC2_CONFIG_CONTENT = "OC2_CONFIG_CONTENT"
  * reads it from `Flag.OC2_DB`). */
 export const OC2_DB = "OC2_DB"
 
-/** Subdirectory below a project's `.oc2` data directory that holds one private
+/** Subdirectory below the lead's data root that holds one private
  * transcript-mirror database per member session. */
 export const TEAMMATE_DATA_SUBDIR = "teammates"
 
@@ -129,13 +130,13 @@ export function memberEnvContract(input: SpawnMemberInput): NodeJS.ProcessEnv {
   })
 }
 
-/** Returns an absolute member-local sqlite path under `<directory>/.oc2/teammates/
- * <sessionID>/oc2.sqlite`. The `.oc2` directory is the project-local data root
- * used across this codebase, and the per-session subdirectory guarantees the
- * path never equals the lead DB path (the lead DB resolves under the XDG data
- * directory, outside the project tree, unless a test overrides `OC2_DB`). */
-export function memberDbPath(directory: string, memberSessionID: string): string {
-  return path.join(directory, ".oc2", TEAMMATE_DATA_SUBDIR, memberSessionID, MEMBER_DB_FILE)
+/** Returns an absolute member-local sqlite path under the lead's data root:
+ * `<Global.Path.data>/teammates/<sessionID>/oc2.sqlite`. The lead database
+ * resolves under the same root, so teammate mirrors live beside it instead of
+ * inside the project tree. The per-session subdirectory guarantees the path
+ * never equals the lead DB path (unless a test overrides `OC2_DB`). */
+export function memberDbPath(memberSessionID: string): string {
+  return path.join(Global.Path.data, TEAMMATE_DATA_SUBDIR, memberSessionID, MEMBER_DB_FILE)
 }
 
 /** Creates the parent directory of a member-local database path. Callers run
