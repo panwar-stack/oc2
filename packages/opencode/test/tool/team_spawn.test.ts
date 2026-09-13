@@ -455,9 +455,15 @@ describe("tool.team_spawn", () => {
             context({ lead, assistant, promptOps }),
           )
 
+          expect(result.title).toBe("Daemon Teammate Starting")
+          expect(result.output).toContain("initializing in background")
+          yield* waitUntil(() => Effect.sync(() => calls.length > 0))
+          yield* waitUntil(() =>
+            team.getMembers(info.id).pipe(
+              Effect.map((members) => members.some((member) => member.name === "sentinel" && member.status === "idle")),
+            ),
+          )
           const member = (yield* team.getMembers(info.id)).find((member) => member.name === "sentinel")
-          expect(result.title).toBe("Daemon Teammate Initialized")
-          expect(result.output).toContain("initialized")
           expect(calls).toHaveLength(1)
           const prompt = calls[0]?.parts.map((part) => (part.type === "text" ? part.text : "")).join("\n")
           expect(prompt).toContain("You are a daemon teammate.")
@@ -474,6 +480,46 @@ describe("tool.team_spawn", () => {
           expect(member?.result).toBeNull()
         }),
       { config: { experimental: { agent_teams: true } } },
+    ),
+  )
+
+  it.live("returns before daemon initialization completes", () =>
+    provideTmpdirInstance(
+      () =>
+        Effect.gen(function* () {
+          const entered = yield* Deferred.make<void>()
+          const gate = yield* Deferred.make<void>()
+          const promptOps: TaskPromptOps = {
+            cancel: () => Effect.void,
+            resolvePromptParts: (template) => Effect.succeed([{ type: "text" as const, text: template }]),
+            prompt: (input) =>
+              Deferred.succeed(entered, undefined).pipe(
+                Effect.andThen(Deferred.await(gate)),
+                Effect.as(reply(input, "initialized")),
+              ),
+            wake: (sessionID) => Effect.sync(() => reply({ sessionID, parts: [] }, "looped")),
+            run: (sessionID) => Effect.sync(() => reply({ sessionID, parts: [] }, "looped")),
+          }
+          const { lead, assistant } = yield* seed()
+          const tool = yield* TeamSpawnTool
+          const def = yield* tool.init()
+
+          const result = yield* def.execute(
+            {
+              name: "sentinel",
+              agent_type: "general",
+              role_prompt: "Watch for integration risks",
+              lifecycle: "daemon",
+            },
+            context({ lead, assistant, promptOps }),
+          )
+
+          expect(result.title).toBe("Daemon Teammate Starting")
+          yield* awaitWithTimeout(Deferred.await(entered), "daemon initialization did not start")
+          expect(Deferred.isDoneUnsafe(gate)).toBe(false)
+          yield* Deferred.succeed(gate, undefined)
+        }),
+      { config: { experimental: { agent_teams: true, team_multiprocess: false } } },
     ),
   )
 
@@ -506,9 +552,14 @@ describe("tool.team_spawn", () => {
             context({ lead, assistant, promptOps }),
           )
 
+          expect(result.title).toBe("Daemon Teammate Starting")
+          expect(result.output).toContain("initializing in background")
+          yield* waitUntil(() =>
+            team.getMembers(info.id).pipe(
+              Effect.map((members) => members.some((member) => member.name === "sentinel" && member.daemon_state === "error")),
+            ),
+          )
           const member = (yield* team.getMembers(info.id)).find((member) => member.name === "sentinel")
-          expect(result.title).toBe("Daemon Teammate Initialization Failed")
-          expect(result.output).toContain("boom")
           expect(member?.lifecycle).toBe("daemon")
           expect(member?.status).toBe("cancelled")
           expect(member?.daemon_state).toBe("error")

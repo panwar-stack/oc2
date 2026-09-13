@@ -79,9 +79,11 @@ const CoreLayer = Layer.mergeAll(
   Question.defaultLayer,
 )
 
+const teamLayer = teamLayerByRole()
+
 const SessionLayer = Layer.mergeAll(
   Permission.defaultLayer,
-  teamLayerByRole(),
+  teamLayer,
   Todo.defaultLayer,
   Session.defaultLayer,
   SessionStatus.defaultLayer,
@@ -94,7 +96,7 @@ const SessionLayer = Layer.mergeAll(
   SessionCompaction.defaultLayer,
   SessionRevert.defaultLayer,
   SessionSummary.defaultLayer,
-  SessionPrompt.defaultLayer,
+  SessionPrompt.layerWithTeam(teamLayer),
   Instruction.defaultLayer,
   LLM.defaultLayer,
   LSP.defaultLayer,
@@ -102,7 +104,7 @@ const SessionLayer = Layer.mergeAll(
   McpAuth.defaultLayer,
   Command.defaultLayer,
   Truncate.defaultLayer,
-  ToolRegistry.defaultLayer,
+  ToolRegistry.layerWithTeam(teamLayer),
 )
 
 const FeatureLayer = Layer.mergeAll(

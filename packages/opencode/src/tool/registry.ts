@@ -449,7 +449,8 @@ export const layer: Layer.Layer<
   }),
 )
 
-export const defaultLayer = Layer.suspend(() =>
+export const layerWithTeam = (teamLayer: Layer.Layer<Team.Service>) =>
+  Layer.suspend(() =>
   layer
     .pipe(
       Layer.provide(Config.defaultLayer),
@@ -459,7 +460,7 @@ export const defaultLayer = Layer.suspend(() =>
       Layer.provide(Skill.defaultLayer),
       Layer.provide(Agent.defaultLayer),
       Layer.provide(Session.defaultLayer),
-      Layer.provide(Layer.mergeAll(BackgroundJob.defaultLayer, Team.defaultLayer)),
+      Layer.provide(Layer.mergeAll(BackgroundJob.defaultLayer, teamLayer)),
       Layer.provide(Provider.defaultLayer),
       Layer.provide(Reference.defaultLayer),
       Layer.provide(LSP.defaultLayer),
@@ -477,7 +478,9 @@ export const defaultLayer = Layer.suspend(() =>
       Layer.provide(Memory.defaultLayer),
       Layer.provide(RuntimeFlags.defaultLayer),
     ),
-)
+  )
+
+export const defaultLayer = layerWithTeam(Team.defaultLayer)
 
 function isZodType(value: unknown): value is z.ZodType {
   return typeof value === "object" && value !== null && "_zod" in value

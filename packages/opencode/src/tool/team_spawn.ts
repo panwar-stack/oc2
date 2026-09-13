@@ -8,7 +8,6 @@ import { Config } from "@/config/config"
 import { Provider } from "@/provider/provider"
 import type { TaskPromptOps } from "./task"
 import { wakeTeamSession } from "./team_wake"
-import { EffectBridge } from "@/effect/bridge"
 import { Cause, Effect, Exit, Schema, Scope, Option } from "effect"
 import { Database } from "@oc2-ai/core/database/database"
 import { SessionControl } from "@oc2-ai/core/session/control"
@@ -366,66 +365,15 @@ export const TeamSpawnTool = Tool.define(
               }
             }
 
-            // Daemon members keep the inline startMember await: initialization is bounded and
-            // settles to `idle`, so the tool still runs it and owns its abort-to-cancel. Task
-            // members start in the background instead — the spawn tool returns immediately and the
-            // lifecycle reconciler claims the member on its next poll (single-winner via the
-            // in-memory `runningMembers` set), so the tool no longer owns member cancellation.
-            if (member.lifecycle === "daemon") {
-              const runCancel = yield* EffectBridge.make()
-              const cancelMember = lifecycleReconciler.cancelMember({ memberID: member.id, ops }).pipe(Effect.ignore)
-              const cancelMemberUnlessPaused = interruptedByPause.pipe(
-                Effect.flatMap((paused) => (paused ? Effect.void : cancelMember)),
-              )
-              function onAbort() {
-                if (SessionControl.isPauseProvenance(ctx.abort.reason)) return
-                runCancel.fork(cancelMember)
-              }
-
-              return yield* Effect.acquireUseRelease(
-                Effect.sync(() => {
-                  ctx.abort.addEventListener("abort", onAbort)
-                  if (ctx.abort.aborted) onAbort()
-                }),
-                () =>
-                  Effect.gen(function* () {
-                    const result = yield* lifecycleReconciler.startMember({ memberID: member.id, ops })
-                    const current = yield* team.getMemberBySession(member.session_id)
-                    const failed = Option.isSome(current) && current.value.daemon_state === "error"
-                    return {
-                      title: failed ? "Daemon Teammate Initialization Failed" : "Daemon Teammate Initialized",
-                      output: [
-                        failed
-                          ? `Daemon teammate initialization failed: ${member.name} (${member.session_id}) [${member.agent_type}]`
-                          : `Daemon teammate initialized: ${member.name} (${member.session_id}) [${member.agent_type}]`,
-                        "",
-                        "<teammate_result>",
-                        result,
-                        "</teammate_result>",
-                      ].join("\n"),
-                      metadata: { memberID: member.id, sessionID: member.session_id, dependencyIDs } as Metadata,
-                    }
-                  }),
-                (_, exit) =>
-                  Effect.gen(function* () {
-                    if (Exit.hasInterrupts(exit)) yield* cancelMemberUnlessPaused
-                  }).pipe(
-                    Effect.ensuring(
-                      Effect.sync(() => {
-                        ctx.abort.removeEventListener("abort", onAbort)
-                      }),
-                    ),
-                  ),
-              )
-            }
-
-            // Task members: return a `started` handle immediately. The member's final result is no
-            // longer embedded here; it is delivered through the durable mailbox auto-notification,
-            // which the lead's finalization barrier consumes. The reconcile poll starts the member
-            // on its next tick; the in-memory `runningMembers` set guarantees a single start.
+            // Return a handle immediately for both lifecycles. The reconciler starts the member on
+            // its next poll, so in-process and multiprocess members have the same non-blocking
+            // contract. Daemon readiness or failure is reported later through durable member state.
             return {
-              title: "Teammate Started",
-              output: `Teammate started: ${member.name} (${member.session_id}) [${member.agent_type}]; running in background`,
+              title: member.lifecycle === "daemon" ? "Daemon Teammate Starting" : "Teammate Started",
+              output:
+                member.lifecycle === "daemon"
+                  ? `Daemon teammate starting: ${member.name} (${member.session_id}) [${member.agent_type}]; initializing in background`
+                  : `Teammate started: ${member.name} (${member.session_id}) [${member.agent_type}]; running in background`,
               metadata: { memberID: member.id, sessionID: member.session_id, dependencyIDs } as Metadata,
             }
           }).pipe(

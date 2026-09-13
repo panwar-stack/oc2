@@ -83,6 +83,207 @@ function failedTerminal(id: string, sessionID: string): Event {
 }
 
 describe("tui sync", () => {
+  test("refreshes a hydrated teammate transcript when the member settles", async () => {
+    const root = sessionInfo("ses_team_root", 0, 1)
+    const child = { ...sessionInfo("ses_team_child", 0, 2), parentID: root.id }
+    let messageRequests = 0
+    const transcript = [
+      {
+        info: {
+          id: "msg_team_child",
+          sessionID: child.id,
+          role: "assistant",
+          parentID: "msg_team_prompt",
+          modelID: "model_test",
+          providerID: "provider_test",
+          mode: "build",
+          agent: "general",
+          path: { cwd: child.directory, root: child.directory },
+          cost: 0,
+          tokens: { input: 0, output: 1, reasoning: 0, cache: { read: 0, write: 0 } },
+          time: { created: 2, completed: 3 },
+        },
+        parts: [
+          {
+            id: "part_team_child",
+            sessionID: child.id,
+            messageID: "msg_team_child",
+            type: "text",
+            text: "done",
+          },
+        ],
+      },
+    ]
+    const { app, emit, sync } = await mount((url) => {
+      if (url.pathname === "/session") return json([root, child])
+      if (url.pathname === `/session/${child.id}`) return json(child)
+      if (url.pathname === `/session/${child.id}/message`) {
+        messageRequests++
+        return json(messageRequests === 1 ? [] : transcript)
+      }
+      if (
+        url.pathname === `/session/${child.id}/root` ||
+        url.pathname === `/session/${child.id}/todo` ||
+        url.pathname === `/session/${child.id}/diff`
+      )
+        return json([])
+    })
+
+    try {
+      await sync.session.sync(child.id)
+      expect(sync.data.message[child.id]).toEqual([])
+
+      emit(
+        event({
+          id: "evt_team_member_completed",
+          type: "team.member.updated",
+          properties: { memberID: "member_test", sessionID: child.id, status: "completed" },
+        }),
+      )
+
+      await wait(() => sync.data.message[child.id]?.length === 1)
+      expect(messageRequests).toBe(2)
+      expect(sync.data.part.msg_team_child?.[0]?.type).toBe("text")
+    } finally {
+      app.renderer.destroy()
+    }
+  })
+
+  test("refreshes a teammate transcript when the member settles during hydration", async () => {
+    const root = sessionInfo("ses_team_root_race", 0, 1)
+    const child = { ...sessionInfo("ses_team_child_race", 0, 2), parentID: root.id }
+    const initialMessages = Promise.withResolvers<Response>()
+    let messageRequests = 0
+    const transcript = [
+      {
+        info: {
+          id: "msg_team_child_race",
+          sessionID: child.id,
+          role: "assistant",
+          parentID: "msg_team_prompt_race",
+          modelID: "model_test",
+          providerID: "provider_test",
+          mode: "build",
+          agent: "general",
+          path: { cwd: child.directory, root: child.directory },
+          cost: 0,
+          tokens: { input: 0, output: 1, reasoning: 0, cache: { read: 0, write: 0 } },
+          time: { created: 2, completed: 3 },
+        },
+        parts: [
+          {
+            id: "part_team_child_race",
+            sessionID: child.id,
+            messageID: "msg_team_child_race",
+            type: "text",
+            text: "done",
+          },
+        ],
+      },
+    ]
+    const { app, emit, sync } = await mount((url) => {
+      if (url.pathname === "/session") return json([root, child])
+      if (url.pathname === `/session/${child.id}`) return json(child)
+      if (url.pathname === `/session/${child.id}/message`) {
+        messageRequests++
+        return messageRequests === 1 ? initialMessages.promise : json(transcript)
+      }
+      if (
+        url.pathname === `/session/${child.id}/root` ||
+        url.pathname === `/session/${child.id}/todo` ||
+        url.pathname === `/session/${child.id}/diff`
+      )
+        return json([])
+    })
+
+    try {
+      const hydration = sync.session.sync(child.id)
+      await wait(() => messageRequests === 1)
+      emit(
+        event({
+          id: "evt_team_member_completed_race",
+          type: "team.member.updated",
+          properties: { memberID: "member_test_race", sessionID: child.id, status: "completed" },
+        }),
+      )
+      initialMessages.resolve(json([]))
+      await hydration
+
+      await wait(() => sync.data.message[child.id]?.length === 1)
+      expect(messageRequests).toBe(2)
+      expect(sync.data.part.msg_team_child_race?.[0]?.type).toBe("text")
+    } finally {
+      app.renderer.destroy()
+    }
+  })
+
+  test("hydrates an unknown team member from the targeted child endpoint", async () => {
+    const root = sessionInfo("ses_team_root", 0, 1)
+    const child = { ...sessionInfo("ses_team_child", 0, 2), parentID: root.id }
+    const initialChildren = Promise.withResolvers<Response>()
+    let childRequests = 0
+    const { app, emit, sync } = await mount((url) => {
+      if (url.pathname === "/session") return json([root])
+      if (url.pathname === `/session/${root.id}/children`) {
+        childRequests++
+        return childRequests === 1 ? initialChildren.promise : json([child])
+      }
+    })
+
+    try {
+      expect(sync.session.get(child.id)).toBeUndefined()
+
+      const initialRefresh = sync.session.refreshChildren(root.id)
+
+      emit(
+        event({
+          id: "evt_team_member_active",
+          type: "team.member.updated",
+          properties: { memberID: "member_test", sessionID: child.id, status: "active" },
+        }),
+      )
+      initialChildren.resolve(json([]))
+      await initialRefresh
+      await wait(() => sync.session.get(child.id) !== undefined)
+
+      expect(sync.session.get(child.id)?.parentID).toBe(root.id)
+      expect(childRequests).toBe(2)
+    } finally {
+      app.renderer.destroy()
+    }
+  })
+
+  test("keeps concurrent session hydration valid when refreshing known children", async () => {
+    const root = sessionInfo("ses_team_root_known", 0, 1)
+    const child = { ...sessionInfo("ses_team_child_known", 1, 2), parentID: root.id }
+    const hydrated = { ...child, cost: 2, time: { ...child.time, updated: 3, processing: 3 } }
+    const childSession = Promise.withResolvers<Response>()
+    const { app, sync } = await mount((url) => {
+      if (url.pathname === "/session") return json([root, child])
+      if (url.pathname === `/session/${root.id}/children`) return json([child])
+      if (url.pathname === `/session/${child.id}`) return childSession.promise
+      if (
+        url.pathname === `/session/${child.id}/root` ||
+        url.pathname === `/session/${child.id}/message` ||
+        url.pathname === `/session/${child.id}/todo` ||
+        url.pathname === `/session/${child.id}/diff`
+      )
+        return json([])
+    })
+
+    try {
+      const hydration = sync.session.sync(child.id)
+      await sync.session.refreshChildren(root.id)
+      childSession.resolve(json(hydrated))
+      await hydration
+
+      expect(sync.session.get(child.id)?.cost).toBe(2)
+      expect(sync.session.get(child.id)?.time.processing).toBe(3)
+    } finally {
+      app.renderer.destroy()
+    }
+  })
+
   test("mounts children before the provider catalog resolves", async () => {
     const provider = Promise.withResolvers<Response>()
     let active: Parameters<NonNullable<Parameters<typeof mount>[0]>>[1]["sync"] | undefined

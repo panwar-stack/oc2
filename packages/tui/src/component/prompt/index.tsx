@@ -24,6 +24,7 @@ import { useSDK } from "../../context/sdk"
 import { useRoute } from "../../context/route"
 import { useProject } from "../../context/project"
 import { useSync } from "../../context/sync"
+import { isMemberWorking } from "../../util/team-status"
 import { useEvent } from "../../context/event"
 import { editorSelectionKey, useEditorContext, type EditorSelection } from "../../context/editor"
 import { normalizePromptContent, openEditor } from "../../editor"
@@ -170,8 +171,7 @@ export function Prompt(props: PromptProps) {
     if (!sessionID || sync.session.get(sessionID)?.parentID) return false
     return sync.data.session.some((session) => {
       if (session.parentID !== sessionID || !sync.data.team_member_status[session.id]) return false
-      const type = sync.data.session_status[session.id]?.type
-      return type === "busy" || type === "retry"
+      return isMemberWorking(sync.data.session_status[session.id], sync.data.team_member_status[session.id])
     })
   })
   const paused = createMemo(() => {

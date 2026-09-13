@@ -975,6 +975,7 @@ export const layer = Layer.effect(
                   messageID: outcome.messageID,
                   teamID: row.team_id,
                   sender: row.session_id,
+                  recipients: outcome.leadSessionID ? [outcome.leadSessionID] : [],
                 }),
               )
             }
@@ -1155,6 +1156,7 @@ export const layer = Layer.effect(
                 messageID: outcome.value.messageID,
                 teamID: outcome.value.teamID,
                 sender: approvalEffects?.sender ?? row.session_id,
+                recipients: [outcome.value.sessionID],
               }),
             )
           }
@@ -1867,7 +1869,12 @@ export const layer = Layer.effect(
             { concurrency: "unbounded", discard: true },
           )
           yield* safePublish(
-            events.publish(MessageReceived, { messageID: id, teamID: input.teamID, sender: input.sender }),
+            events.publish(MessageReceived, {
+              messageID: id,
+              teamID: input.teamID,
+              sender: input.sender,
+              recipients,
+            }),
           )
         }),
       )

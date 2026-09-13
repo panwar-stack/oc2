@@ -18,7 +18,12 @@ export const MemberUpdated = EventV2.define({
 })
 export const MessageReceived = EventV2.define({
   type: "team.message.received",
-  schema: { messageID: Schema.String, teamID: Schema.String, sender: Schema.String },
+  schema: {
+    messageID: Schema.String,
+    teamID: Schema.String,
+    sender: Schema.String,
+    recipients: Schema.Array(Schema.String),
+  },
 })
 
 export const TeamEvents = {

@@ -2844,6 +2844,7 @@ it.live(
                 messageID: `msg_fallback_${crypto.randomUUID()}`,
                 teamID: info.id,
                 sender: worker.id,
+                recipients: [lead.id],
               })
               yield* barrier.afterNextHandoff(Deferred.succeed(continuationFinalized, undefined))
             }),

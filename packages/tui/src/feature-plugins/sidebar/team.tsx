@@ -1,7 +1,10 @@
 import type { TuiPlugin, TuiPluginApi, TuiPluginModule } from "@oc2-ai/plugin/tui"
 import { useSync } from "../../context/sync"
-import { createMemo, createSignal, For, Show } from "solid-js"
+import { createEffect, createMemo, createSignal, For, on, Show } from "solid-js"
 import { Spinner } from "../../component/spinner"
+import { isMemberWorking } from "../../util/team-status"
+
+export { isMemberWorking } from "../../util/team-status"
 
 const id = "internal:sidebar-team"
 
@@ -25,25 +28,17 @@ export function statusLabel(
   teamStatus: { status: string; lifecycle?: string; daemonState?: string | null } | undefined,
 ) {
   const t = status?.type
-  if (teamStatus?.lifecycle === "daemon") return `daemon:${teamStatus.daemonState ?? teamStatus.status}`
   if (t === "retry") return "retry"
   if (t === "busy") return "working"
+  if (teamStatus?.lifecycle === "daemon") return `daemon:${teamStatus.daemonState ?? teamStatus.status}`
+  if (teamStatus?.status === "active" || teamStatus?.status === "starting") return "working"
   if (teamStatus?.status === "completed") return "completed"
   if (teamStatus?.status === "cancelled") return "cancelled"
   if (teamStatus?.status === "failed") return "failed"
-  if (teamStatus?.status === "active") return "active"
-  if (teamStatus?.status === "starting") return "starting"
   if (teamStatus?.status === "blocked") return "blocked"
+  if (t === "idle") return "idle"
   if (teamStatus?.status === "idle") return "idle"
   return "idle"
-}
-
-export function isMemberWorking(
-  status: { type: string } | undefined,
-  teamStatus: { status: string; lifecycle?: string; daemonState?: string | null } | undefined,
-) {
-  if (status?.type === "busy" || status?.type === "retry") return true
-  return teamStatus?.status === "starting"
 }
 
 function View(props: { api: TuiPluginApi; session_id: string }) {
@@ -52,6 +47,12 @@ function View(props: { api: TuiPluginApi; session_id: string }) {
   const theme = () => props.api.theme.current
   const teamsEnabled = createMemo(() => props.api.state.config.experimental?.agent_teams === true)
   const members = createMemo(() => (teamsEnabled() ? props.api.state.session.children(props.session_id) : []))
+
+  createEffect(
+    on([teamsEnabled, () => props.session_id], ([enabled, sessionID]) => {
+      if (enabled) void sync.session.refreshChildren(sessionID).catch(() => {})
+    }),
+  )
 
   const pendingPermissions = createMemo(() => {
     if (!teamsEnabled()) return 0

@@ -2240,7 +2240,8 @@ Teammates report material progress, blockers, questions, and results without a l
   }),
 )
 
-export const defaultLayer = Layer.suspend(() =>
+export const layerWithTeam = (teamLayer: Layer.Layer<Team.Service>) =>
+  Layer.suspend(() =>
   layer.pipe(
     Layer.provide(SessionRunState.defaultLayer),
     Layer.provide(Layer.mergeAll(SessionStatus.defaultLayer, SessionCompaction.defaultLayer)),
@@ -2249,7 +2250,7 @@ export const defaultLayer = Layer.suspend(() =>
     Layer.provide(Permission.defaultLayer),
     Layer.provide(MCP.defaultLayer),
     Layer.provide(LSP.defaultLayer),
-    Layer.provide(Layer.mergeAll(ToolRegistry.defaultLayer, Team.defaultLayer)),
+    Layer.provide(Layer.mergeAll(ToolRegistry.layerWithTeam(teamLayer), teamLayer)),
     Layer.provide(Truncate.defaultLayer),
     Layer.provide(Provider.defaultLayer),
     Layer.provide(Config.defaultLayer),
@@ -2274,7 +2275,9 @@ export const defaultLayer = Layer.suspend(() =>
       ),
     ),
   ),
-)
+  )
+
+export const defaultLayer = layerWithTeam(Team.defaultLayer)
 const ModelRef = Schema.Struct({
   providerID: ProviderV2.ID,
   modelID: ModelV2.ID,

@@ -267,6 +267,8 @@ export const {
 
     const fullSyncedSessions = new Set<string>()
     const syncingSessions = new Map<string, Promise<void>>()
+    const refreshingChildren = new Map<string, Promise<void>>()
+    let activeTeamParentID: string | undefined
     const refreshingSessions = new Map<
       string,
       { pending?: { generation: number; aggregatesOnly: boolean } }
@@ -499,6 +501,34 @@ export const {
       })()
     }
 
+    function refreshChildSessions(sessionID: string) {
+      const parentID = store.session.find((session) => session.id === sessionID)?.parentID ?? sessionID
+      activeTeamParentID = parentID
+      const refreshing = refreshingChildren.get(parentID)
+      if (refreshing) return refreshing
+      const task = sdk.client.session
+        .children({ sessionID: parentID }, { throwOnError: true })
+        .then((response) => {
+          setStore(
+            "session",
+            produce((draft) => {
+              for (const child of response.data ?? []) {
+                if (sessionAuthority.deleted(child.id)) continue
+                const match = search(draft, child.id, (item) => item.id)
+                if (match.found) continue
+                sessionAuthority.create(child.id)
+                draft.splice(match.index, 0, child)
+              }
+            }),
+          )
+        })
+        .finally(() => {
+          if (refreshingChildren.get(parentID) === task) refreshingChildren.delete(parentID)
+        })
+      refreshingChildren.set(parentID, task)
+      return task
+    }
+
     event.subscribe((event, { workspace }) => {
       if (event.type === "session.created") sessionAuthority.create(event.properties.info.id)
       if (event.type === "session.deleted") sessionAuthority.remove(event.properties.info.id)
@@ -723,6 +753,29 @@ export const {
             lifecycle: properties.lifecycle,
             daemonState: properties.daemonState,
           })
+          const known = search(store.session, event.properties.sessionID, (session) => session.id).found
+          if (!known && activeTeamParentID) {
+            const parentID = activeTeamParentID
+            void refreshChildSessions(parentID)
+              .then(() => {
+                const hydrated = search(store.session, event.properties.sessionID, (session) => session.id).found
+                if (!hydrated) return refreshChildSessions(parentID)
+              })
+              .catch(() => {})
+          }
+          const settled =
+            properties.status === "completed" ||
+            properties.status === "cancelled" ||
+            properties.status === "failed" ||
+            (properties.lifecycle === "daemon" && properties.status === "idle")
+          if (settled && (fullSyncedSessions.has(properties.sessionID) || syncingSessions.has(properties.sessionID))) {
+            const current = syncingSessions.get(properties.sessionID)
+            void (async () => {
+              await current
+              fullSyncedSessions.delete(properties.sessionID)
+              await result.session.sync(properties.sessionID)
+            })().catch(() => {})
+          }
           break
         }
 
@@ -1030,6 +1083,9 @@ export const {
         async refresh() {
           const list = await listSessions()
           applySessionList(list)
+        },
+        async refreshChildren(sessionID: string) {
+          return refreshChildSessions(sessionID)
         },
         async refreshRoots(sessionID: string) {
           const generation = sessionAuthority.beginSession(sessionID)

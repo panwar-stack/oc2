@@ -758,10 +758,13 @@ const memberEventResponse = Effect.fn("TeamHttpApi.memberEventResponse")(functio
       }
       if (event.type === "team.message.received") {
         if (data.teamID !== teamID) return
-        // The published event does not name recipients; a member mailbox probe decides whether
-        // this message is actionable for the subscribed member.
-        const pending = yield* teamService.hasPendingMailboxMessages(sessionID)
-        if (!pending) return
+        if (Array.isArray(data.recipients)) {
+          if (!data.recipients.includes(sessionID)) return
+        } else {
+          // Compatibility for events emitted before recipient-aware routing was introduced.
+          const pending = yield* teamService.hasPendingMailboxMessages(sessionID)
+          if (!pending) return
+        }
         Queue.offerUnsafe(queue, {
           id: event.id,
           type: "team.mail",

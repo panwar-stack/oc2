@@ -4,6 +4,7 @@ import { useRouteData } from "../context/route"
 import { useSync } from "../context/sync"
 import { useSDK } from "../context/sdk"
 import { useTheme } from "../context/theme"
+import { statusLabel as memberStatusLabel } from "../feature-plugins/sidebar/team"
 import { useDialog } from "../ui/dialog"
 import { SplitBorder } from "../ui/border"
 import { TextAttributes } from "@opentui/core"
@@ -42,24 +43,6 @@ function memberStatusColor(
   if (teamStatus?.status === "failed") return theme.error
   if (["starting", "blocked", "active", "idle"].includes(teamStatus?.status ?? "")) return theme.info
   return theme.textMuted
-}
-
-function memberStatusLabel(
-  status: { type: string } | undefined,
-  teamStatus: { status: string; lifecycle?: string; daemonState?: string | null } | undefined,
-) {
-  const t = status?.type
-  if (teamStatus?.lifecycle === "daemon") return `daemon:${teamStatus.daemonState ?? teamStatus.status}`
-  if (t === "retry") return "retry"
-  if (t === "busy") return "working"
-  if (teamStatus?.status === "completed") return "completed"
-  if (teamStatus?.status === "cancelled") return "cancelled"
-  if (teamStatus?.status === "failed") return "failed"
-  if (teamStatus?.status === "active") return "active"
-  if (teamStatus?.status === "starting") return "starting"
-  if (teamStatus?.status === "blocked") return "blocked"
-  if (teamStatus?.status === "idle") return "idle"
-  return "idle"
 }
 
 function taskStatusColor(status: string, theme: ReturnType<typeof useTheme>["theme"]) {

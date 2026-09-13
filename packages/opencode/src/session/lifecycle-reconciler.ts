@@ -1277,6 +1277,7 @@ export const layer = Layer.effect(
                 messageID: settled.messageID,
                 teamID: member.team_id,
                 sender: member.session_id,
+                recipients: [settled.team.lead_session_id],
               }),
             )
           }
@@ -1295,6 +1296,7 @@ export const layer = Layer.effect(
                 messageID: memberMessageID(descendant.id, "cancelled", descendant.run_generation),
                 teamID: descendant.team_id,
                 sender: descendant.session_id,
+                recipients: [settled.team.lead_session_id],
               }),
             )
           }
