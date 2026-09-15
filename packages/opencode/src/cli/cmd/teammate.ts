@@ -18,7 +18,7 @@ import {
 import { MemberTransport } from "@/team/member-transport"
 import { SessionV1 } from "@oc2-ai/core/v1/session"
 import { asc, eq } from "drizzle-orm"
-import { Cause, Effect, Exit, Option } from "effect"
+import { Cause, Effect, Exit, Option, Schedule, Semaphore } from "effect"
 import type { InstanceContext } from "@/project/instance-context"
 import { InstanceState } from "@/effect/instance-state"
 import { Runner } from "@/effect/runner"
@@ -30,6 +30,8 @@ import path from "path"
 
 /** Control-plane fetch timeout for context/history/result reads. */
 const CONTACT_TIMEOUT_MS = 15_000
+/** Maximum delay before an active member's new transcript events reach the lead. */
+const TRANSCRIPT_SYNC_INTERVAL = "1 second"
 /** Basic-auth username shared by the member env contract. */
 const SERVER_USERNAME = "oc2"
 
@@ -205,6 +207,16 @@ function readMemberEnv(): MemberEnv {
   }
 }
 
+/** Reads the lead-built initial prompt once from stdin. An empty payload (or a
+ * manually started TTY process) uses the durable role prompt for compatibility. */
+const readMemberPrompt = (): Effect.Effect<string | undefined, CliError> => {
+  if (process.stdin.isTTY) return Effect.succeed(undefined)
+  return Effect.tryPromise({
+    try: () => Bun.stdin.text().then((prompt) => (prompt.length > 0 ? prompt : undefined)),
+    catch: (error) => new CliError({ message: `${logTag}: cannot read member prompt from stdin: ${errorText(error)}` }),
+  })
+}
+
 /** Performs a control-plane request with Basic auth and the x-oc2-directory
  * header. Network failures become typed CliErrors. */
 const controlPlaneRequest = (env: MemberEnv, url: string, init?: RequestInit): Effect.Effect<Response, CliError> =>
@@ -313,6 +325,7 @@ export const TeammateCommand = effectCmd({
       try: () => readMemberEnv(),
       catch: (error) => new CliError({ message: errorText(error) }),
     })
+    const memberPrompt = yield* readMemberPrompt()
     const ctx = yield* InstanceState.context
 
     // The member context is the authoritative pre-run snapshot: role prompt,
@@ -329,6 +342,7 @@ export const TeammateCommand = effectCmd({
     // The env hint wins, but the durable member row is authoritative for
     // daemon detection so a manually started member cannot skip its lifecycle.
     const daemon = env.daemon || context.member.lifecycle === "daemon"
+    const syncTranscript = makeTranscriptSync(env)
 
     // Heartbeats are liveness transport, started before the run and stopped on
     // every exit so an idle daemon keeps its durable clock fresh between wakes
@@ -340,14 +354,14 @@ export const TeammateCommand = effectCmd({
     return yield* Effect.gen(function* () {
       if (daemon) {
         // The daemon beats for its whole parked lifetime; it stops with the process.
-        yield* runDaemon(env, ctx, context)
+        yield* runDaemon(env, ctx, context, memberPrompt, syncTranscript)
         return
       }
-      const result = yield* runMember(env, ctx, context, true)
+      const result = yield* runMember(env, ctx, context, memberPrompt, true, syncTranscript)
       // Stop liveness before reporting the terminal result so no heartbeat races
       // the terminal settlement. The client is a best-effort fire-and-forget POST.
       yield* stopHeartbeat
-      return yield* settleAfterRun(env, result)
+      return yield* settleAfterRun(env, result, syncTranscript)
     }).pipe(Effect.ensuring(stopHeartbeat))
   }),
 })
@@ -371,7 +385,9 @@ const runMember = (
   env: MemberEnv,
   ctx: InstanceContext,
   context: MemberContext,
+  memberPrompt: string | undefined,
   allowFresh: boolean,
+  syncTranscript: Effect.Effect<number, CliError, Database.Service>,
 ): Effect.Effect<
   Exit.Exit<SessionV1.WithParts, unknown> | undefined,
   CliError,
@@ -397,7 +413,7 @@ const runMember = (
 
     const prompt = yield* SessionPrompt.Service
     if (existing && mirrorMessages > 0) {
-      return yield* prompt.loop({ sessionID: SessionID.make(env.sessionID) }).pipe(Effect.exit)
+      return yield* runWithTranscriptSync(syncTranscript, prompt.loop({ sessionID: SessionID.make(env.sessionID) }))
     }
     if (!allowFresh) {
       // A resume with no durable user prompt has no admitted prompt to run, so
@@ -406,8 +422,10 @@ const runMember = (
     }
     const agentName = context.session?.agent ?? context.member.agent_type ?? "build"
     const model = context.session?.model ?? context.member.model
-    return yield* prompt
-      .prompt({
+    const parts = yield* prompt.resolvePromptParts(memberPrompt ?? context.member.role_prompt)
+    return yield* runWithTranscriptSync(
+      syncTranscript,
+      prompt.prompt({
         sessionID: SessionID.make(env.sessionID),
         messageID: env.promptID ? MessageID.make(env.promptID) : MessageID.ascending(),
         agent: agentName,
@@ -418,10 +436,27 @@ const runMember = (
             }
           : undefined,
         variant: model?.variant,
-        parts: [{ type: "text", text: context.member.role_prompt }],
-      })
-      .pipe(Effect.exit)
+        parts,
+      }),
+    )
   })
+
+/** Runs a prompt with a scoped best-effort transcript replication loop. The
+ * final settlement still performs an authoritative flush. */
+const runWithTranscriptSync = (
+  syncTranscript: Effect.Effect<number, CliError, Database.Service>,
+  run: Effect.Effect<SessionV1.WithParts, unknown>,
+) =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      yield* syncTranscript.pipe(
+        Effect.catch((error) => Effect.logWarning("live teammate transcript sync failed", { error: error.message })),
+        Effect.repeat(Schedule.spaced(TRANSCRIPT_SYNC_INTERVAL)),
+        Effect.forkScoped({ startImmediately: true }),
+      )
+      return yield* run.pipe(Effect.exit)
+    }),
+  )
 
 /**
  * Daemon lifecycle. The process reports its initial idle state, then parks on
@@ -436,12 +471,14 @@ const runDaemon = (
   env: MemberEnv,
   ctx: InstanceContext,
   context: MemberContext,
+  memberPrompt: string | undefined,
+  syncTranscript: Effect.Effect<number, CliError, Database.Service>,
 ): Effect.Effect<void, CliError, Database.Service | SessionPrompt.Service> =>
   Effect.gen(function* () {
     // One initial run so the daemon's admission turn reaches a terminal
     // assistant turn, matching the in-process daemon path.
-    const initial = yield* runMember(env, ctx, context, true)
-    yield* settleAfterRun(env, initial)
+    const initial = yield* runMember(env, ctx, context, memberPrompt, true, syncTranscript)
+    yield* settleAfterRun(env, initial, syncTranscript)
     // A failed or errored initial turn already reported a terminal outcome. The
     // lead settled the daemon to cancelled, so parking would wait forever on an
     // event this process missed: exit instead. A successful turn parks below.
@@ -465,8 +502,8 @@ const runDaemon = (
           case "team.mail":
           case "team.run":
           case "team.wake": {
-            const result = yield* runMember(env, ctx, context, false)
-            yield* settleAfterRun(env, result)
+            const result = yield* runMember(env, ctx, context, undefined, false, syncTranscript)
+            yield* settleAfterRun(env, result, syncTranscript)
             return "continue" as const
           }
           default:
@@ -483,6 +520,7 @@ const runDaemon = (
 const settleAfterRun = (
   env: MemberEnv,
   result: Exit.Exit<SessionV1.WithParts, unknown> | undefined,
+  syncTranscript: Effect.Effect<number, CliError, Database.Service>,
 ): Effect.Effect<void, CliError, Database.Service> =>
   Effect.gen(function* () {
     if (result === undefined) return
@@ -497,7 +535,7 @@ const settleAfterRun = (
         return yield* fail(`${logTag}: run suspended without reaching a terminal assistant turn`)
       }
       const text = errorText(Cause.squash(cause))
-      const pushed = yield* syncTranscript(env)
+      const pushed = yield* syncTranscript
       yield* reportResult(env, "cancelled", pushed, { result: text, failureCode: "provider_error" })
       return
     }
@@ -509,7 +547,7 @@ const settleAfterRun = (
       // terminal outcome; the lead reconcile loop owns any later resume.
       return
     }
-    const pushed = yield* syncTranscript(env)
+    const pushed = yield* syncTranscript
     if (terminal.state === "error") {
       yield* reportResult(env, "cancelled", pushed, { result: terminal.text, failureCode: "provider_error" })
       return
@@ -641,36 +679,44 @@ const hydrateContextMessages = (
 /** Pushes the member aggregate's mirror rows to the lead. The team endpoint
  * deduplicates event IDs and assigns lead-local contiguous sequence numbers, so
  * this process never has to request unrelated aggregate history. */
-const syncTranscript = (env: MemberEnv): Effect.Effect<number, CliError, Database.Service> =>
-  Effect.gen(function* () {
-    const rows = yield* mirrorEventRows
-    if (rows.length === 0) return 0
+const makeTranscriptSync = (env: MemberEnv): Effect.Effect<number, CliError, Database.Service> => {
+  const lock = Semaphore.makeUnsafe(1)
+  const synced = new Set<string>()
+  let cursor = 0
+  return lock.withPermits(1)(
+    Effect.gen(function* () {
+      const rows = (yield* mirrorEventRows).filter((row) => !synced.has(row.id))
+      if (rows.length === 0) return cursor
 
-    const events: EventV2.SerializedEvent[] = rows.map((row) => ({
-      id: row.id,
-      aggregateID: env.sessionID,
-      seq: row.seq,
-      type: row.type,
-      data: row.data,
-    }))
-    const syncPath = `/team/${encodeURIComponent(env.teamID)}/transcript/sync`
-    const response = yield* requestExpectOk(
-      env,
-      `${env.leadURL}${syncPath}?sessionID=${encodeURIComponent(env.sessionID)}`,
-      {
-        method: "POST",
-        body: JSON.stringify({ directory: env.directory, events }),
-      },
-    )
-    if (
-      typeof response !== "object" ||
-      response === null ||
-      typeof (response as { cursor?: unknown }).cursor !== "number"
-    ) {
-      return yield* fail(`${logTag}: transcript sync response did not include a numeric cursor`)
-    }
-    return (response as { cursor: number }).cursor
-  })
+      const events: EventV2.SerializedEvent[] = rows.map((row) => ({
+        id: row.id,
+        aggregateID: env.sessionID,
+        seq: row.seq,
+        type: row.type,
+        data: row.data,
+      }))
+      const syncPath = `/team/${encodeURIComponent(env.teamID)}/transcript/sync`
+      const response = yield* requestExpectOk(
+        env,
+        `${env.leadURL}${syncPath}?sessionID=${encodeURIComponent(env.sessionID)}`,
+        {
+          method: "POST",
+          body: JSON.stringify({ directory: env.directory, events }),
+        },
+      )
+      if (
+        typeof response !== "object" ||
+        response === null ||
+        typeof (response as { cursor?: unknown }).cursor !== "number"
+      ) {
+        return yield* fail(`${logTag}: transcript sync response did not include a numeric cursor`)
+      }
+      for (const row of rows) synced.add(row.id)
+      cursor = Math.max(cursor, (response as { cursor: number }).cursor)
+      return cursor
+    }),
+  )
+}
 
 /** Reports a terminal outcome to the lead with the transcript cursor. A 2xx
  * response (including a retry-admitted lead outcome) ends the process

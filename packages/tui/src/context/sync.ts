@@ -268,7 +268,6 @@ export const {
     const fullSyncedSessions = new Set<string>()
     const syncingSessions = new Map<string, Promise<void>>()
     const refreshingChildren = new Map<string, Promise<void>>()
-    let activeTeamParentID: string | undefined
     const refreshingSessions = new Map<
       string,
       { pending?: { generation: number; aggregatesOnly: boolean } }
@@ -503,7 +502,6 @@ export const {
 
     function refreshChildSessions(sessionID: string) {
       const parentID = store.session.find((session) => session.id === sessionID)?.parentID ?? sessionID
-      activeTeamParentID = parentID
       const refreshing = refreshingChildren.get(parentID)
       if (refreshing) return refreshing
       const task = sdk.client.session
@@ -754,15 +752,7 @@ export const {
             daemonState: properties.daemonState,
           })
           const known = search(store.session, event.properties.sessionID, (session) => session.id).found
-          if (!known && activeTeamParentID) {
-            const parentID = activeTeamParentID
-            void refreshChildSessions(parentID)
-              .then(() => {
-                const hydrated = search(store.session, event.properties.sessionID, (session) => session.id).found
-                if (!hydrated) return refreshChildSessions(parentID)
-              })
-              .catch(() => {})
-          }
+          if (!known) refreshSession(event.properties.sessionID)
           const settled =
             properties.status === "completed" ||
             properties.status === "cancelled" ||

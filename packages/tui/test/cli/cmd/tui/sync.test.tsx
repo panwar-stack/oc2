@@ -217,23 +217,28 @@ describe("tui sync", () => {
     }
   })
 
-  test("hydrates an unknown team member from the targeted child endpoint", async () => {
-    const root = sessionInfo("ses_team_root", 0, 1)
-    const child = { ...sessionInfo("ses_team_child", 0, 2), parentID: root.id }
-    const initialChildren = Promise.withResolvers<Response>()
+  test("hydrates an unknown team member without using a stale active parent", async () => {
+    const staleRoot = sessionInfo("ses_team_root_stale", 0, 1)
+    const root = sessionInfo("ses_team_root_current", 0, 1)
+    const child = { ...sessionInfo("ses_team_child_current", 0, 2), parentID: root.id }
+    let staleChildRequests = 0
     let childRequests = 0
     const { app, emit, sync } = await mount((url) => {
-      if (url.pathname === "/session") return json([root])
-      if (url.pathname === `/session/${root.id}/children`) {
-        childRequests++
-        return childRequests === 1 ? initialChildren.promise : json([child])
+      if (url.pathname === "/session") return json([staleRoot, root])
+      if (url.pathname === `/session/${staleRoot.id}/children`) {
+        staleChildRequests++
+        return json([])
       }
+      if (url.pathname === `/session/${child.id}`) {
+        childRequests++
+        return json(child)
+      }
+      return undefined
     })
 
     try {
       expect(sync.session.get(child.id)).toBeUndefined()
-
-      const initialRefresh = sync.session.refreshChildren(root.id)
+      await sync.session.refreshChildren(staleRoot.id)
 
       emit(
         event({
@@ -242,12 +247,11 @@ describe("tui sync", () => {
           properties: { memberID: "member_test", sessionID: child.id, status: "active" },
         }),
       )
-      initialChildren.resolve(json([]))
-      await initialRefresh
       await wait(() => sync.session.get(child.id) !== undefined)
 
       expect(sync.session.get(child.id)?.parentID).toBe(root.id)
-      expect(childRequests).toBe(2)
+      expect(staleChildRequests).toBe(1)
+      expect(childRequests).toBe(1)
     } finally {
       app.renderer.destroy()
     }

@@ -1856,6 +1856,7 @@ export const layer = Layer.effect(
      */
     const spawnRemoteMember = Effect.fn("LifecycleReconciler.spawnRemoteMember")(function* (
       prepared: Extract<PrepareResult, { action: "prompt" | "resume" }>,
+      prompt: string,
     ) {
       const leadURL = TeamControlPlane.resolveLeadControlPlaneURL()
       if (!leadURL) throw new Error("Cannot resolve the lead control-plane URL for a remote member")
@@ -1888,6 +1889,7 @@ export const layer = Layer.effect(
         secret,
         dbPath,
         configContent: JSON.stringify(config),
+        memberPrompt: prompt,
         promptID: String(prepared.promptMessageID),
         lifecycle: prepared.member.lifecycle,
         cwd: directory,
@@ -2077,6 +2079,13 @@ export const layer = Layer.effect(
           })
           return "Teammate stopped before starting: missing persisted model."
         }
+        const dependencyContext =
+          prepared.retry || prepared.dependencyContext !== undefined
+            ? (prepared.dependencyContext ?? "")
+            : yield* prepareDependencyContext(prepared.member, prepared.members)
+        const promptText = prepared.retry
+          ? memberRetryPrompt(prepared.team, prepared.member)
+          : memberPrompt(prepared.team, prepared.member, prepared.members, dependencyContext)
         // Remote member-process branch. Finite task members and daemons run in a
         // spawned OS process when the experimental team_multiprocess flag is on and this
         // lead knows its own control-plane URL. The child fetches context, runs the standard
@@ -2108,7 +2117,7 @@ export const layer = Layer.effect(
           ) {
             return "Teammate is running in a member process."
           }
-          const spawned = yield* spawnRemoteMember(prepared).pipe(Effect.exit)
+          const spawned = yield* spawnRemoteMember(prepared, promptText).pipe(Effect.exit)
           if (Exit.isFailure(spawned)) {
             const cause = Cause.squash(spawned.cause)
             const message = cause instanceof Error ? cause.message : String(cause)
@@ -2130,15 +2139,7 @@ export const layer = Layer.effect(
           // `run` awaits the loop. `wake` must never be used here: it returns as soon as work is
           // scheduled, so its value would settle the member against a stale turn.
           if (prepared.action === "resume") return yield* input.ops.run(SessionID.make(prepared.member.session_id))
-          const dependencyContext =
-            prepared.retry || prepared.dependencyContext !== undefined
-              ? (prepared.dependencyContext ?? "")
-              : yield* prepareDependencyContext(prepared.member, prepared.members)
-          const parts = yield* input.ops.resolvePromptParts(
-            prepared.retry
-              ? memberRetryPrompt(prepared.team, prepared.member)
-              : memberPrompt(prepared.team, prepared.member, prepared.members, dependencyContext),
-          )
+          const parts = yield* input.ops.resolvePromptParts(promptText)
           return yield* input.ops.prompt({
             messageID: prepared.promptMessageID,
             sessionID: SessionID.make(prepared.member.session_id),

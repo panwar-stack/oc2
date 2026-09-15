@@ -85,20 +85,23 @@ export const layer = Layer.effect(
   }),
 )
 
-export const defaultLayer: Layer.Layer<Service> = layer.pipe(
-  Layer.provide([
-    Config.defaultLayer,
-    Format.defaultLayer,
-    LSP.defaultLayer,
-    LifecycleReconciler.defaultLayer,
-    SessionPrompt.defaultLayer,
-    Plugin.defaultLayer,
-    Project.defaultLayer,
-    Reference.defaultLayer,
-    Search.defaultLayer,
-    Snapshot.defaultLayer,
-    Vcs.defaultLayer,
-  ]),
-)
+export const layerWithPrompt = (promptLayer: Layer.Layer<SessionPrompt.Service>): Layer.Layer<Service> =>
+  layer.pipe(
+    Layer.provide([
+      Config.defaultLayer,
+      Format.defaultLayer,
+      LSP.defaultLayer,
+      LifecycleReconciler.defaultLayer,
+      promptLayer,
+      Plugin.defaultLayer,
+      Project.defaultLayer,
+      Reference.defaultLayer,
+      Search.defaultLayer,
+      Snapshot.defaultLayer,
+      Vcs.defaultLayer,
+    ]),
+  )
+
+export const defaultLayer = layerWithPrompt(SessionPrompt.defaultLayer)
 
 export * as InstanceBootstrap from "./bootstrap"

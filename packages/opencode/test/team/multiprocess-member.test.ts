@@ -112,9 +112,7 @@ afterEach(async () => {
 
 // Reads the lead control-plane base URL from the real TCP listener the test
 // layer serves, so the child can reach it over loopback.
-const controlPlaneUrl = HttpServer.HttpServer.use((server) =>
-  Effect.succeed(HttpServer.formatAddress(server.address)),
-)
+const controlPlaneUrl = HttpServer.HttpServer.use((server) => Effect.succeed(HttpServer.formatAddress(server.address)))
 
 // Builds the prompt ops the reconciler needs to wake the parked lead loop,
 // matching InstanceBootstrap (src/project/bootstrap.ts:64-70).
@@ -156,6 +154,11 @@ describe("multiprocess teammate member process", () => {
             model: ref,
             rolePrompt: "Report the number five.",
           })
+          const task = yield* team.createTask({
+            teamID: info.id,
+            description: "Claim this task from the child process",
+            assignee: memberSession.id,
+          })
 
           // The lead's first durable user message. The real model loop below
           // turns it into a full run that reaches the finalization barrier.
@@ -171,16 +174,21 @@ describe("multiprocess teammate member process", () => {
           // LLM. The teammate entrypoint prompts with the member's role prompt
           // text as the user message, so match on that.
           const childContent = (hit: { body?: Record<string, unknown> }) =>
-            (((hit.body as Record<string, unknown> | undefined)?.messages as Array<{ content?: unknown }> | undefined) ??
-              [])
+            (
+              ((hit.body as Record<string, unknown> | undefined)?.messages as
+                | Array<{ role?: unknown; content?: unknown }>
+                | undefined) ?? []
+            )
+              .filter((message) => message.role === "user")
               .map((message) =>
                 typeof message.content === "string" ? message.content : JSON.stringify(message.content ?? ""),
               )
               .join("\n")
           const isChildRequest = (hit: { body?: Record<string, unknown> }) =>
             childContent(hit).includes("Report the number five.")
-          yield* llm.pushMatch(isChildRequest, reply().text("five").stop())
-          yield* llm.pushMatch(isChildRequest, reply().text("five").stop())
+          const releaseChild = Promise.withResolvers<void>()
+          yield* llm.pushMatch(isChildRequest, reply().tool("team_task_claim", { task_id: task.id }))
+          yield* llm.pushMatch(isChildRequest, reply().wait(releaseChild.promise).text("five").stop())
 
           // Fork the lead loop. It produces its own finalization text turn and
           // then parks at the finalization barrier while the member runs.
@@ -194,16 +202,51 @@ describe("multiprocess teammate member process", () => {
           const outcome = yield* reconciler.startMember({ memberID: member.id, ops })
           expect(outcome).toContain("member process")
 
+          // The final model response remains held, so this transcript can only
+          // arrive through live synchronization rather than the final flush.
+          yield* Effect.gen(function* () {
+            const activeHistory = yield* pollWithTimeout(
+              Effect.gen(function* () {
+                const row = yield* team.getMemberBySession(memberSession.id)
+                if (Option.isNone(row) || row.value.status !== "active") return undefined
+                const history = yield* sessions.messages({ sessionID: memberSession.id })
+                return history.length > 0 ? history : undefined
+              }),
+              "active member transcript remained empty",
+              "30 seconds",
+            )
+            expect(activeHistory.some((message) => message.info.role === "user")).toBe(true)
+          }).pipe(Effect.ensuring(Effect.sync(() => releaseChild.resolve())))
+
           // The child fetches context, runs its prompt loop against the mock
           // LLM, syncs its transcript, reports /result; the lead settles.
           const probe = Effect.gen(function* () {
             const row = yield* team.getMemberBySession(memberSession.id)
-            return Option.isSome(row) && row.value.status === "completed"
-              ? (row.value as Team.Member)
-              : undefined
+            return Option.isSome(row) && row.value.status === "completed" ? (row.value as Team.Member) : undefined
           })
           const current = yield* pollWithTimeout(probe, "member never reached terminal completed", "60 seconds")
           expect(current.status).toBe("completed")
+          const claimed = yield* team.getTask(info.id, task.id)
+          const childHistory = yield* sessions.messages({ sessionID: memberSession.id })
+          const claimPart = childHistory
+            .flatMap((message) => message.parts)
+            .find(
+              (part): part is SessionV1.ToolPart & { state: SessionV1.ToolStateCompleted } =>
+                part.type === "tool" && part.tool === "team_task_claim" && part.state.status === "completed",
+            )
+          expect(Option.isSome(claimed) && claimed.value.status).toBe("in_progress")
+          expect(claimPart?.state.output).toContain("Task claimed:")
+          expect(claimPart?.state.output).not.toContain("No active team.")
+          const childHits = (yield* llm.hits).filter(isChildRequest)
+          expect(childHits.length).toBeGreaterThan(0)
+          const initialPrompt = childContent(childHits[0] ?? {})
+          expect(initialPrompt).toContain('You are teammate "worker" in team "loopback-team".')
+          expect(initialPrompt).toContain("Team goal: Run one task")
+          expect(initialPrompt).toContain(`The lead session is ${lead.id}. Your session is ${memberSession.id}.`)
+          expect(initialPrompt).toContain("Available team tools (use these to coordinate with the team):")
+          expect(initialPrompt).toContain("Claim the shared task with team_task_claim before mutating files.")
+          expect(initialPrompt).toContain("Report the number five.")
+          yield* team.updateTask(info.id, task.id, { status: "completed" }, { sessionID: lead.id, isLead: true })
           // Defect-1 regression: spawn persists the SHA-256 hash of the member
           // secret on the durable row the control-plane verifier reads. The child
           // also presents that secret as Basic auth. This test runs with no

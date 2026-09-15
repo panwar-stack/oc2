@@ -77,6 +77,8 @@ export interface SpawnMemberInput {
   readonly configContent: string
   /** Optional durable admitted prompt message ID (`OC2_TEAM_PROMPT_ID`). */
   readonly promptID?: string
+  /** Full initial teammate prompt, including team context and member guidance. */
+  readonly memberPrompt: string
   /** Optional member lifecycle (`OC2_TEAM_LIFECYCLE`). Set to `"daemon"` so a
    * spawned daemon parks on the SSE stream after its initial turn instead of
    * reporting a terminal result. The member CLI also reads the durable member
@@ -112,12 +114,11 @@ export function resolveMemberExecutableArgs(): {
   }
 }
 
-/** Builds the full environment contract for a spawned member process: the
- * sanitized parent environment plus every `OC2_TEAM_*` value, `OC2_DB`, and
- * `OC2_CONFIG_CONTENT`. Any parent team/role/db values are intentionally
- * overwritten by the member contract. */
+/** Builds the environment contract for a spawned member process. The full
+ * member prompt is sent through stdin and is explicitly removed from inherited
+ * environment data. */
 export function memberEnvContract(input: SpawnMemberInput): NodeJS.ProcessEnv {
-  return sanitizedProcessEnv({
+  const env = sanitizedProcessEnv({
     [OC2_PROCESS_ROLE]: "teammate",
     [OC2_TEAM_LEAD_URL]: input.leadURL,
     [OC2_TEAM_ID]: input.teamID,
@@ -128,6 +129,8 @@ export function memberEnvContract(input: SpawnMemberInput): NodeJS.ProcessEnv {
     ...(input.promptID ? { [OC2_TEAM_PROMPT_ID]: input.promptID } : {}),
     ...(input.lifecycle ? { [OC2_TEAM_LIFECYCLE]: input.lifecycle } : {}),
   })
+  delete env.OC2_TEAM_MEMBER_PROMPT
+  return env
 }
 
 /** Returns an absolute member-local sqlite path under the lead's data root:
@@ -197,11 +200,11 @@ function routeStreamLines(onLine: (line: string) => void): (chunk: string) => vo
 }
 
 /** Spawns one detached, non-blocking member OS process on the current
- * executable with the `teammate` subcommand and the full member env contract.
- * Child stdout and stderr lines are logged at debug level with the member
- * session tag. Spawn failures (including an unresolvable entrypoint) surface as
- * a typed {@link MemberSpawnError}. The child is unref'd so it never keeps the
- * lead process alive by itself. */
+ * executable with the `teammate` subcommand. The full prompt is written once to
+ * the child's stdin as UTF-8 and stdin is then closed. Child stdout and stderr
+ * lines are logged at debug level with the member session tag. Spawn and stdin
+ * failures surface as a typed {@link MemberSpawnError}. The child is unref'd so
+ * it never keeps the lead process alive by itself. */
 export const spawnMemberProcess = (input: SpawnMemberInput): Effect.Effect<void, MemberSpawnError> =>
   Effect.gen(function* () {
     const resolved = yield* Effect.try({
@@ -219,29 +222,31 @@ export const spawnMemberProcess = (input: SpawnMemberInput): Effect.Effect<void,
     const { execPath, args } = resolved
     yield* Effect.callback<ChildProcess, MemberSpawnError>((resume) => {
       let settled = false
-      const fail = (error: Error) => {
+      let proc: ChildProcess | undefined
+      const fail = (operation: "spawn" | "write prompt to", error: Error) => {
         if (settled) return
         settled = true
+        proc?.stdin?.destroy()
+        if (proc?.exitCode === null && proc.signalCode === null) proc.kill("SIGTERM")
         resume(
           Effect.fail(
             new MemberSpawnError({
               memberSessionID: input.memberSessionID,
-              detail: `Failed to spawn member process for session ${input.memberSessionID}: ${error.message}`,
+              detail: `Failed to ${operation} member process for session ${input.memberSessionID}: ${error.message}`,
             }),
           ),
         )
       }
 
-      let proc: ChildProcess
       try {
         proc = launch(execPath, args, {
           detached: true,
           cwd: input.cwd,
-          stdio: ["ignore", "pipe", "pipe"],
+          stdio: ["pipe", "pipe", "pipe"],
           env: memberEnvContract(input),
         })
       } catch (error) {
-        fail(error instanceof Error ? error : new Error(String(error)))
+        fail("spawn", error instanceof Error ? error : new Error(String(error)))
         return
       }
 
@@ -250,21 +255,39 @@ export const spawnMemberProcess = (input: SpawnMemberInput): Effect.Effect<void,
           log.error("member process error", { memberSessionID: input.memberSessionID, error: error.message })
           return
         }
-        fail(error)
+        fail("spawn", error)
       })
       proc.once("spawn", () => {
         if (settled) return
-        settled = true
-        // Track the handle in the lead process so a later team shutdown can signal it.
-        // Cross-VM members have no handle here and stop through the team.closed event.
-        MemberProcessRegistry.register(input.memberSessionID, proc)
-        proc.unref()
-        log.debug("member process spawned", {
-          memberSessionID: input.memberSessionID,
-          pid: proc.pid,
-          execPath,
-        })
-        resume(Effect.succeed(proc))
+        const child = proc
+        if (!child.stdin) {
+          fail("write prompt to", new Error("child stdin is unavailable"))
+          return
+        }
+        const onStdinError = (error: Error) => fail("write prompt to", error)
+        child.stdin.once("error", onStdinError)
+        try {
+          child.stdin.end(Buffer.from(input.memberPrompt, "utf8"), (error?: Error | null) => {
+            if (error) {
+              fail("write prompt to", error)
+              return
+            }
+            if (settled) return
+            settled = true
+            // Track the handle in the lead process so a later team shutdown can signal it.
+            // Cross-VM members have no handle here and stop through the team.closed event.
+            MemberProcessRegistry.register(input.memberSessionID, child)
+            child.unref()
+            log.debug("member process spawned", {
+              memberSessionID: input.memberSessionID,
+              pid: child.pid,
+              execPath,
+            })
+            resume(Effect.succeed(child))
+          })
+        } catch (error) {
+          fail("write prompt to", error instanceof Error ? error : new Error(String(error)))
+        }
       })
 
       // Wire output lines to the debug log immediately so no early child output

@@ -80,6 +80,7 @@ const CoreLayer = Layer.mergeAll(
 )
 
 const teamLayer = teamLayerByRole()
+const sessionPromptLayer = SessionPrompt.layerWithTeam(teamLayer)
 
 const SessionLayer = Layer.mergeAll(
   Permission.defaultLayer,
@@ -96,7 +97,7 @@ const SessionLayer = Layer.mergeAll(
   SessionCompaction.defaultLayer,
   SessionRevert.defaultLayer,
   SessionSummary.defaultLayer,
-  SessionPrompt.layerWithTeam(teamLayer),
+  sessionPromptLayer,
   Instruction.defaultLayer,
   LLM.defaultLayer,
   LSP.defaultLayer,
@@ -119,7 +120,7 @@ const FeatureLayer = Layer.mergeAll(
 )
 
 export const AppLayer = Layer.mergeAll(CoreLayer, SessionLayer, FeatureLayer).pipe(
-  Layer.provideMerge(InstanceLayer.layer),
+  Layer.provideMerge(InstanceLayer.layerWithPrompt(sessionPromptLayer)),
   Layer.provideMerge(Observability.layer),
 )
 
