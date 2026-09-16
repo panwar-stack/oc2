@@ -555,7 +555,7 @@ describe("multiprocess durable lost-member detection", () => {
     ),
   )
 
-  it.live("keeps default-off behavior: a stale remote daemon is not settled when team_multiprocess is false", () =>
+  it.live("keeps explicit opt-out behavior: a stale remote daemon is not settled when team_multiprocess is false", () =>
     provideTmpdirInstance(
       () =>
         Effect.gen(function* () {
@@ -604,7 +604,7 @@ describe("multiprocess durable lost-member detection", () => {
           ).toHaveLength(0)
         }),
       {
-        config: { experimental: { agent_teams: true } },
+        config: { experimental: { agent_teams: true, team_multiprocess: false } },
       },
     ),
   )

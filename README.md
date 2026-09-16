@@ -43,9 +43,9 @@ OC2 can handle a focused change in one session. When the work branches, its expe
 4. Require plan approval before that worker receives mutating permissions.
 5. Track shared tasks, exchange mailbox messages, and produce a persisted team report.
 
-This is not a collection of isolated subagent calls. Team membership, dependencies, tasks, messages, and results remain attached to the session. Workers can claim tasks transactionally, wake one another through messages, and wait for named dependencies. Coordination is process-local by default rather than a distributed scheduler.
+This is not a collection of isolated subagent calls. Team membership, dependencies, tasks, messages, and results remain attached to the session. Workers can claim tasks transactionally, wake one another through messages, and wait for named dependencies. Coordination uses a local control plane rather than a distributed scheduler.
 
-An opt-in multi-process transport (`experimental.team_multiprocess`, default `false`) can run each teammate in its own OC2 process with a local transcript mirror and connect it to the lead over an HTTP and SSE control plane. It remains opt-in until its two-process harness is green in CI, so the default single-process behavior is unchanged.
+The multi-process transport (`experimental.team_multiprocess`, default `true`) runs each teammate in its own OC2 process with a local transcript mirror and connects it to the lead over an HTTP and SSE control plane. Set `experimental.team_multiprocess` to `false` to use the single-process transport.
 
 Use `/use-team` for guided team orchestration. Agent teams are experimental and can also be driven through the team tools exposed to the lead agent.
 

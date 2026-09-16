@@ -286,9 +286,9 @@ Lead-initiated wake waits are bounded. Lead tools briefly wait for woken teammat
 
 ## Multi-Process Team Transport
 
-The default team runtime keeps every teammate in the lead OS process. An opt-in second mode runs each teammate in its own headless OS process and connects it to the lead over HTTP and SSE.
+The default team runtime runs each teammate in its own headless OS process and connects it to the lead over HTTP and SSE. A single-process mode keeps every teammate in the lead OS process.
 
-The mode is gated by `experimental.team_multiprocess`. The flag defaults to `false`, so absent or `false` reproduces the in-process behavior and existing tests unchanged. The two-process path is opt-in until the multi-process harness is green in CI; no default flip ships in this change.
+The mode is gated by `experimental.team_multiprocess`. The flag defaults to `true`, so an absent or `true` value uses the multi-process behavior. Set it explicitly to `false` to use the in-process behavior.
 
 ### Process Model
 
@@ -304,9 +304,9 @@ The lead advertises one control-plane base URL to every spawned member. Resoluti
 
 1. An explicit `OC2_TEAM_LEAD_URL` (trimmed, nonempty) always wins. This is the cross-VM override.
 2. Otherwise, the URL published by a real listener: `serve`, `web`, `acp`, or a TUI started with `--port`/`--hostname`/`--mdns`. `Server.listen` prefers `127.0.0.1:4096` when the port is `0` and falls back to an ephemeral port when 4096 is taken.
-3. Otherwise, when `experimental.team_multiprocess` is exactly `true`, the lead starts a loopback control-plane bridge on `127.0.0.1`, preferring port `4096` and falling back to an ephemeral port. This covers the default TUI and default `run` paths, which use the in-process `Server.Default().app.fetch` handler and never call `Server.listen`.
+3. Otherwise, when `experimental.team_multiprocess` is enabled, the lead starts a loopback control-plane bridge on `127.0.0.1`, preferring port `4096` and falling back to an ephemeral port. This covers the default TUI and default `run` paths, which use the in-process `Server.Default().app.fetch` handler and never call `Server.listen`.
 
-The bridge serves the already-initialized in-process handler; it does not call `Server.listen` and does not build a second service graph, so there is exactly one reconciler loop against the durable store. With the flag absent or `false`, no bridge starts and resolution stays exactly as before, so default-off behavior is unchanged.
+The bridge serves the already-initialized in-process handler; it does not call `Server.listen` and does not build a second service graph, so there is exactly one reconciler loop against the durable store. With the flag explicitly set to `false`, no bridge starts and URL resolution uses the single-process behavior.
 
 When only the loopback bridge exists, the advertised URL is reachable from the same host. A member on another VM still needs an explicit reachable `OC2_TEAM_LEAD_URL`.
 

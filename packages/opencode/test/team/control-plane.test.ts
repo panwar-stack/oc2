@@ -59,10 +59,11 @@ describe("resolveLeadControlPlaneURL", () => {
 })
 
 describe("isMultiprocessEnabled", () => {
-  test("is true only when the experimental flag is exactly true", () => {
+  test("is true by default and false only when the experimental flag is exactly false", () => {
     expect(isMultiprocessEnabled({ experimental: { team_multiprocess: true } })).toBe(true)
-    expect(isMultiprocessEnabled(undefined)).toBe(false)
-    expect(isMultiprocessEnabled({})).toBe(false)
-    expect(isMultiprocessEnabled({ experimental: {} })).toBe(false)
+    expect(isMultiprocessEnabled(undefined)).toBe(true)
+    expect(isMultiprocessEnabled({})).toBe(true)
+    expect(isMultiprocessEnabled({ experimental: {} })).toBe(true)
+    expect(isMultiprocessEnabled({ experimental: { team_multiprocess: false } })).toBe(false)
   })
 })

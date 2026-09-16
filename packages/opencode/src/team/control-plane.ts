@@ -43,12 +43,9 @@ export function resolveLeadControlPlaneURL(): string | undefined {
   return ServerAddress.url?.origin
 }
 
-/**
- * True only when the opt-in multi-process transport is explicitly enabled.
- * The flag is absent by default, so the single-process path is unchanged.
- */
+/** True unless the multi-process transport is explicitly disabled. */
 export function isMultiprocessEnabled(config: { experimental?: { team_multiprocess?: boolean } } | undefined): boolean {
-  return config?.experimental?.team_multiprocess === true
+  return config?.experimental?.team_multiprocess !== false
 }
 
 /** Loopback host the control-plane bridge binds when no explicit
@@ -237,7 +234,7 @@ function bindBridgeServer(port: number): Promise<Server> {
  * {@link DEFAULT_CONTROL_PLANE_PORT} and falling back to an ephemeral port.
  *
  * The caller is responsible for the `experimental.team_multiprocess` gate, so
- * default-off mode never binds a socket.
+ * explicit opt-out mode never binds a socket.
  */
 export function ensureLeadControlPlaneListener(): Promise<string> {
   const configured = process.env[OC2_TEAM_LEAD_URL]?.trim()

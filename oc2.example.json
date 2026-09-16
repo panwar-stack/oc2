@@ -117,7 +117,7 @@
     "agent_teams": true,
     "openTelemetry": false,
     "drop_reasoning": true,
-    "team_multiprocess": false
+    "team_multiprocess": true
   },
 
   "fugu": {
