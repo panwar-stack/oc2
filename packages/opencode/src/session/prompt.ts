@@ -1715,9 +1715,10 @@ Teammates report material progress, blockers, questions, and results without a l
         `Team protocol guidance:
 - One active team per lead session. Reuse the current active team; team_create on an existing team fails with a stable "Team Create Failed" result naming it. Do not create a second team for review.
 - Run review phases with fresh read-only reviewer sessions spawned INSIDE the same active team. Do not create a separate concurrent team for review.
+- Do not dependency-bind a review-only teammate to an implementation teammate only for sequencing. A member dependency failure cancels blocked descendants. Wait for implementation to complete, then spawn a fresh read-only reviewer without depends_on or wait_for.
 - Create shared tasks before mutation and reserve disjoint exact files with team_task_create owned_paths so teammate file writes do not collide.
 - Treat an empty teammate result as an untrusted runtime failure, not proof that no work occurred. Before deciding whether work exists, check the mailbox once and inspect git status --short plus the focused diff.
-- A teammate that returned an empty or failed result cannot be resumed by messaging. Spawn a fresh read-only reviewer in the same active team for more evidence.
+- A teammate that returned an empty or failed result, or a cancelled terminal reviewer, cannot be resumed by messaging. Spawn a fresh read-only reviewer in the same active team for more evidence.
 - Keep Git staging, commit, branch, stash, reset, restore, clean, rebase, push, and PR operations in the lead session. This is protocol guidance, not runtime enforcement; teammates must not run whole-worktree Git mutation commands.
 - Run a current final report with team_report({ final: true }) immediately before normal shutdown. Shutdown then records a final-report checkpoint.
 - Owned-task file reservations cover exact files through write, edit, and apply_patch inside one running project instance only. Shell, plugin, MCP, formatter, external-process, and cross-process writes are not runtime controlled.

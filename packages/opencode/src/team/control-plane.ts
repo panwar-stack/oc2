@@ -3,18 +3,18 @@ import { OC2_TEAM_LEAD_URL } from "@oc2-ai/core/util/opencode-process"
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http"
 
 /**
- * How long a spawned member process may go without refreshing its liveness
- * clock (`team_member.daemon_last_active`) before the lead treats it as lost.
- * The clock starts at spawn (`spawnRemoteMember`) and every heartbeat refreshes
- * it. Detection reuses the existing 500ms reconcile tick; this constant is only
+ * How long a spawned member process may go without durable liveness activity
+ * before the lead treats it as lost. Detection uses the newer of the remote
+ * spawn time and `team_member.daemon_last_active`, which every heartbeat
+ * refreshes. It reuses the existing 500ms reconcile tick; this constant is only
  * the staleness threshold, not a poll interval.
  */
-export const LOST_MEMBER_TIMEOUT_MS = 120_000
+export const LOST_MEMBER_TIMEOUT_MS = 300_000
 
 /**
  * Environment override for {@link LOST_MEMBER_TIMEOUT_MS}. It exists so tests
  * can exercise durable lost-member detection quickly and deterministically
- * without waiting two real minutes. The value must be a positive finite integer
+ * without waiting five real minutes. The value must be a positive finite integer
  * (milliseconds); any other value falls back to the default constant. It is read
  * by the caller at reconcile time, not at module load, so a test can set it.
  */

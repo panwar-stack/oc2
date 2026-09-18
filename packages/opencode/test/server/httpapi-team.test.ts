@@ -690,6 +690,7 @@ describe("team control-plane HttpApi", () => {
       const stored = members.find((row) => row.id === member.id)
       expect(stored?.daemon_last_active).toBe(body.daemon_last_active)
       expect(stored?.daemon_state).toBe("running")
+      expect(stored?.status).toBe("active")
 
       const revisionAfter = yield* readTeamRevision(info.id)
       expect(revisionAfter).toBe(revisionBefore)

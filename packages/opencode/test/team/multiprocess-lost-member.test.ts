@@ -20,7 +20,7 @@ import { ModelV2 } from "@oc2-ai/core/model"
 import { ProviderV2 } from "@oc2-ai/core/provider"
 import { SessionControl } from "@oc2-ai/core/session/control"
 import { SessionTable } from "@oc2-ai/core/session/sql"
-import { Effect, Layer } from "effect"
+import { Deferred, Effect, Fiber, Layer } from "effect"
 import { eq } from "drizzle-orm"
 import { disposeAllInstances, provideTmpdirInstance } from "../fixture/fixture"
 import { testEffect } from "../lib/effect"
@@ -57,6 +57,7 @@ const it = testEffect(
 )
 
 const TIMEOUT_ENV = "OC2_TEAM_LOST_MEMBER_TIMEOUT_MS"
+const CONFIG_CONTENT_ENV = "OC2_CONFIG_CONTENT"
 const originalTimeout = process.env[TIMEOUT_ENV]
 
 afterEach(async () => {
@@ -376,6 +377,146 @@ describe("multiprocess durable lost-member detection", () => {
     ),
   )
 
+  it.live("does not settle a member whose heartbeat refreshes after the stale scan", () =>
+    provideTmpdirInstance(
+      () =>
+        Effect.gen(function* () {
+          process.env[TIMEOUT_ENV] = "1000"
+          const config = yield* Config.Service
+          const sessions = yield* Session.Service
+          const team = yield* Team.Service
+          const lifecycle = yield* LifecycleReconciler.Service
+
+          const lead = yield* sessions.create({ title: "Lead" })
+          const info = yield* team.create({ name: "heartbeat-race-team", goal: "Watch", leadSessionID: lead.id })
+          const daemonSession = yield* sessions.create({ parentID: lead.id, title: "Daemon" })
+          const daemon = yield* team.addMember({
+            teamID: info.id,
+            sessionID: daemonSession.id,
+            name: "sentinel",
+            agentType: "general",
+            model: ref,
+            rolePrompt: "Watch forever",
+            lifecycle: "daemon",
+            daemonState: "idle",
+            daemonLastActive: Date.now() - 60_000,
+          })
+          const promptMessageID = `prompt-${daemon.id}`
+          const staleAt = Date.now() - 60_000
+          yield* seedRemoteMember({
+            sessionID: daemonSession.id,
+            memberID: daemon.id,
+            promptMessageID,
+            generation: 1,
+            state: "idle",
+            remoteSpawnedAt: staleAt,
+          })
+          yield* seedMemberRow({
+            memberID: daemon.id,
+            status: "idle",
+            generation: 1,
+            daemonLastActive: staleAt,
+            daemonState: "idle",
+          })
+          const before = yield* teamRevision(info.id)
+
+          // reconcile reads the member snapshot before it reads config. Hold that
+          // config read to refresh the heartbeat after the stale scan but before
+          // settleMember opens its transaction. No wall-clock sleep is needed.
+          const staleScanFinished = yield* Deferred.make<void>()
+          const releaseReconcile = yield* Deferred.make<void>()
+          const controlledConfig = Config.Service.of({
+            ...config,
+            get: () =>
+              Deferred.succeed(staleScanFinished, undefined).pipe(
+                Effect.andThen(Deferred.await(releaseReconcile)),
+                Effect.andThen(config.get()),
+              ),
+          })
+          const reconcileFiber = yield* lifecycle.reconcile.pipe(
+            Effect.provideService(Config.Service, controlledConfig),
+            Effect.forkScoped,
+          )
+          yield* Deferred.await(staleScanFinished)
+          yield* seedMemberRow({
+            memberID: daemon.id,
+            status: "idle",
+            generation: 1,
+            daemonLastActive: Date.now(),
+            daemonState: "idle",
+          })
+          yield* Deferred.succeed(releaseReconcile, undefined)
+          yield* Fiber.join(reconcileFiber)
+
+          const current = yield* memberRow(info.id, daemon.id)
+          expect(current?.status).toBe("idle")
+          expect(current?.failure_code ?? null).toBeNull()
+          expect(yield* teamRevision(info.id)).toBe(before)
+          expect(
+            (yield* team.getMessages(info.id)).filter(
+              (message) => message.id === `lifecycle:member:${daemon.id}:cancelled:1`,
+            ),
+          ).toHaveLength(0)
+        }),
+      {
+        config: { experimental: { agent_teams: true, team_multiprocess: true } },
+      },
+    ),
+  )
+
+  it.live("uses a newer remoteSpawnedAt when daemon_last_active is older", () =>
+    provideTmpdirInstance(
+      () =>
+        Effect.gen(function* () {
+          process.env[TIMEOUT_ENV] = "1000"
+          const sessions = yield* Session.Service
+          const team = yield* Team.Service
+          const lifecycle = yield* LifecycleReconciler.Service
+
+          const lead = yield* sessions.create({ title: "Lead" })
+          const info = yield* team.create({ name: "fresh-spawn-team", goal: "Run one task", leadSessionID: lead.id })
+          const memberSession = yield* sessions.create({ parentID: lead.id, title: "Worker" })
+          const member = yield* team.addMember({
+            teamID: info.id,
+            sessionID: memberSession.id,
+            name: "worker",
+            agentType: "general",
+            model: ref,
+            rolePrompt: "Do durable work",
+          })
+          const promptMessageID = `prompt-${member.id}`
+          yield* seedRemoteMember({
+            sessionID: memberSession.id,
+            memberID: member.id,
+            promptMessageID,
+            generation: 1,
+            state: "running",
+            remoteSpawnedAt: Date.now(),
+          })
+          yield* seedMemberRow({
+            memberID: member.id,
+            status: "active",
+            generation: 1,
+            daemonLastActive: Date.now() - 60_000,
+          })
+
+          yield* lifecycle.reconcile
+
+          const current = yield* memberRow(info.id, member.id)
+          expect(current?.status).toBe("active")
+          expect(current?.failure_code ?? null).toBeNull()
+          expect(
+            (yield* team.getMessages(info.id)).filter(
+              (message) => message.id === `lifecycle:member:${member.id}:cancelled:1`,
+            ),
+          ).toHaveLength(0)
+        }),
+      {
+        config: { experimental: { agent_teams: true, team_multiprocess: true } },
+      },
+    ),
+  )
+
   it.live(
     "settleRemoteMember keeps the remoteSpawnedAt marker on the idle metadata, so a later stale heartbeat is caught",
     () =>
@@ -556,56 +697,69 @@ describe("multiprocess durable lost-member detection", () => {
   )
 
   it.live("keeps explicit opt-out behavior: a stale remote daemon is not settled when team_multiprocess is false", () =>
-    provideTmpdirInstance(
+    Effect.acquireUseRelease(
+      Effect.sync(() => {
+        const previous = process.env[CONFIG_CONTENT_ENV]
+        delete process.env[CONFIG_CONTENT_ENV]
+        return previous
+      }),
       () =>
-        Effect.gen(function* () {
-          process.env[TIMEOUT_ENV] = "1000"
-          const sessions = yield* Session.Service
-          const team = yield* Team.Service
-          const lifecycle = yield* LifecycleReconciler.Service
+        provideTmpdirInstance(
+          () =>
+            Effect.gen(function* () {
+              process.env[TIMEOUT_ENV] = "1000"
+              const sessions = yield* Session.Service
+              const team = yield* Team.Service
+              const lifecycle = yield* LifecycleReconciler.Service
 
-          const lead = yield* sessions.create({ title: "Lead" })
-          const info = yield* team.create({ name: "flag-off-team", goal: "Watch", leadSessionID: lead.id })
-          const daemonSession = yield* sessions.create({ parentID: lead.id, title: "Daemon" })
-          const daemon = yield* team.addMember({
-            teamID: info.id,
-            sessionID: daemonSession.id,
-            name: "sentinel",
-            agentType: "general",
-            model: ref,
-            rolePrompt: "Watch forever",
-            lifecycle: "daemon",
-            daemonState: "idle",
-            daemonLastActive: Date.now() - 60_000,
-          })
-          yield* seedRemoteMember({
-            sessionID: daemonSession.id,
-            memberID: daemon.id,
-            promptMessageID: `prompt-${daemon.id}`,
-            generation: 1,
-            state: "idle",
-            remoteSpawnedAt: Date.now() - 60_000,
-          })
-          yield* seedMemberRow({
-            memberID: daemon.id,
-            status: "idle",
-            generation: 1,
-            daemonLastActive: Date.now() - 60_000,
-            daemonState: "idle",
-          })
+              const lead = yield* sessions.create({ title: "Lead" })
+              const info = yield* team.create({ name: "flag-off-team", goal: "Watch", leadSessionID: lead.id })
+              const daemonSession = yield* sessions.create({ parentID: lead.id, title: "Daemon" })
+              const daemon = yield* team.addMember({
+                teamID: info.id,
+                sessionID: daemonSession.id,
+                name: "sentinel",
+                agentType: "general",
+                model: ref,
+                rolePrompt: "Watch forever",
+                lifecycle: "daemon",
+                daemonState: "idle",
+                daemonLastActive: Date.now() - 60_000,
+              })
+              yield* seedRemoteMember({
+                sessionID: daemonSession.id,
+                memberID: daemon.id,
+                promptMessageID: `prompt-${daemon.id}`,
+                generation: 1,
+                state: "idle",
+                remoteSpawnedAt: Date.now() - 60_000,
+              })
+              yield* seedMemberRow({
+                memberID: daemon.id,
+                status: "idle",
+                generation: 1,
+                daemonLastActive: Date.now() - 60_000,
+                daemonState: "idle",
+              })
 
-          yield* lifecycle.reconcile
+              yield* lifecycle.reconcile
 
-          expect((yield* memberRow(info.id, daemon.id))?.status).toBe("idle")
-          expect(
-            (yield* team.getMessages(info.id)).filter(
-              (message) => message.id === `lifecycle:member:${daemon.id}:cancelled:1`,
-            ),
-          ).toHaveLength(0)
+              expect((yield* memberRow(info.id, daemon.id))?.status).toBe("idle")
+              expect(
+                (yield* team.getMessages(info.id)).filter(
+                  (message) => message.id === `lifecycle:member:${daemon.id}:cancelled:1`,
+                ),
+              ).toHaveLength(0)
+            }),
+          {
+            config: { experimental: { agent_teams: true, team_multiprocess: false } },
+          },
+        ),
+      (previous) =>
+        Effect.sync(() => {
+          if (previous === undefined) delete process.env[CONFIG_CONTENT_ENV]
+          else process.env[CONFIG_CONTENT_ENV] = previous
         }),
-      {
-        config: { experimental: { agent_teams: true, team_multiprocess: false } },
-      },
     ),
   )
 })
@@ -619,6 +773,7 @@ describe("resolveLostMemberTimeoutMs", () => {
 
   test("uses the exported default when the override is absent", () => {
     withEnv(undefined, () => {
+      expect(TeamControlPlane.LOST_MEMBER_TIMEOUT_MS).toBe(300_000)
       expect(TeamControlPlane.resolveLostMemberTimeoutMs()).toBe(TeamControlPlane.LOST_MEMBER_TIMEOUT_MS)
     })
   })

@@ -1445,6 +1445,12 @@ it.live("injects team orchestration guidance for primary lead sessions when agen
         "Teammates must send material progress, blockers, questions, and results without a lead status request.",
       )
       expect(leadGuidance).toContain("Relevant teammate or user events wake the lead.")
+      expect(leadGuidance).toContain(
+        "Do not dependency-bind a review-only teammate to an implementation teammate only for sequencing.",
+      )
+      expect(leadGuidance).toContain(
+        "a cancelled terminal reviewer, cannot be resumed by messaging. Spawn a fresh read-only reviewer",
+      )
       expect(leadGuidance).not.toContain("Do not finalize while finite teammates remain nonterminal.")
       expect(leadGuidance).not.toContain("Ask for periodic updates.")
       expect(leadGuidance).not.toContain("An empty mailbox does not require ending this turn.")

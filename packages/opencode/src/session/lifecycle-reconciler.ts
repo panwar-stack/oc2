@@ -888,6 +888,11 @@ export const layer = Layer.effect(
       /** The run generation this settlement applies to. Omitted for legacy settle paths. */
       generation?: number
       allowWhilePaused?: boolean
+      /**
+       * When present, settle only if transaction-fresh remote liveness is strictly older than this
+       * epoch-millisecond cutoff. Used only by lost-member detection.
+       */
+      livenessCutoff?: number
     }) {
       const memberTeam = yield* db
         .select({ teamID: TeamMemberTable.team_id })
@@ -923,6 +928,28 @@ export const layer = Layer.effect(
                 (persisted.memberID !== member.id || persisted.promptMessageID !== input.promptMessageID)
               )
                 return undefined
+              if (input.livenessCutoff !== undefined) {
+                // Lost-member settlement is based on a poll snapshot. Recheck the complete remote
+                // admission identity and both liveness clocks under BEGIN IMMEDIATE before any
+                // pause metadata, generation adoption, task, message, or member write. Equality is
+                // fresh: a member is lost only when its newest activity is strictly before cutoff.
+                if (
+                  !persisted ||
+                  persisted.memberID !== member.id ||
+                  persisted.promptMessageID !== input.promptMessageID ||
+                  persisted.generation === undefined ||
+                  persisted.generation !== input.generation ||
+                  persisted.generation !== member.run_generation ||
+                  typeof persisted.remoteSpawnedAt !== "number" ||
+                  !Number.isFinite(persisted.remoteSpawnedAt)
+                )
+                  return undefined
+                const lastActivity = Math.max(
+                  member.daemon_last_active ?? persisted.remoteSpawnedAt,
+                  persisted.remoteSpawnedAt,
+                )
+                if (!Number.isFinite(lastActivity) || lastActivity >= input.livenessCutoff) return undefined
+              }
               // Resolve the generation this settlement applies to. Legacy metadata (no generation)
               // is adopted 0 -> 1 in this same transaction and settled directly without any retry
               // decision; an already-admitted legacy row keeps its persisted run_generation.
@@ -2692,9 +2719,11 @@ export const layer = Layer.effect(
           fact.state !== "running" &&
           fact.remoteSpawnedAt !== undefined
         ) {
+          const detectedAt = Date.now()
           const timeoutMs = TeamControlPlane.resolveLostMemberTimeoutMs()
-          const lastActive = member.daemon_last_active ?? fact.remoteSpawnedAt
-          if (Date.now() - lastActive > timeoutMs) {
+          const livenessCutoff = detectedAt - timeoutMs
+          const lastActivity = Math.max(member.daemon_last_active ?? fact.remoteSpawnedAt, fact.remoteSpawnedAt)
+          if (lastActivity < livenessCutoff) {
             yield* settleMember({
               memberID: member.id,
               state: "cancelled",
@@ -2705,6 +2734,7 @@ export const layer = Layer.effect(
               failureCode: "provider_error",
               promptMessageID: fact.promptMessageID,
               generation: fact.generation,
+              livenessCutoff,
             })
             continue
           }
@@ -2775,9 +2805,11 @@ export const layer = Layer.effect(
           fact.state === "running" &&
           fact.remoteSpawnedAt !== undefined
         ) {
+          const detectedAt = Date.now()
           const timeoutMs = TeamControlPlane.resolveLostMemberTimeoutMs()
-          const lastActive = member.daemon_last_active ?? fact.remoteSpawnedAt
-          if (Date.now() - lastActive > timeoutMs) {
+          const livenessCutoff = detectedAt - timeoutMs
+          const lastActivity = Math.max(member.daemon_last_active ?? fact.remoteSpawnedAt, fact.remoteSpawnedAt)
+          if (lastActivity < livenessCutoff) {
             yield* settleMember({
               memberID: member.id,
               state: "cancelled",
@@ -2788,6 +2820,7 @@ export const layer = Layer.effect(
               failureCode: "provider_error",
               promptMessageID: fact.promptMessageID,
               generation: fact.generation,
+              livenessCutoff,
             })
             continue
           }

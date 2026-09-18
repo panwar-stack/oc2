@@ -11,7 +11,7 @@ import { EventSequenceTable, EventTable } from "@oc2-ai/core/event/sql"
 import { Database } from "@oc2-ai/core/database/database"
 import { Log } from "@oc2-ai/core/util/log"
 import * as InstanceState from "@/effect/instance-state"
-import { and, eq } from "drizzle-orm"
+import { and, eq, notInArray } from "drizzle-orm"
 import { Effect, Option, Queue } from "effect"
 import * as Stream from "effect/Stream"
 import { HttpServerResponse } from "effect/unstable/http"
@@ -406,7 +406,7 @@ export const teamHandlers = HttpApiBuilder.group(InstanceHttpApi, "team", (handl
       // durable daemon liveness handling when remote members actually run.
       const { db } = yield* Database.Service
       const now = Date.now()
-      yield* db
+      const updated = yield* db
         .update(TeamMemberTable)
         .set({
           daemon_last_active: now,
@@ -417,9 +417,19 @@ export const teamHandlers = HttpApiBuilder.group(InstanceHttpApi, "team", (handl
             ? { daemon_error: ctx.payload.daemon_error }
             : {}),
         })
-        .where(and(eq(TeamMemberTable.id, member.id), eq(TeamMemberTable.team_id, info.id)))
-        .run()
+        .where(
+          and(
+            eq(TeamMemberTable.id, member.id),
+            eq(TeamMemberTable.team_id, info.id),
+            notInArray(TeamMemberTable.status, ["completed", "cancelled", "failed"]),
+          ),
+        )
+        .returning({ id: TeamMemberTable.id })
+        .get()
         .pipe(Effect.orDie)
+      if (!updated) {
+        return yield* teamRequestError(`Member ${ctx.params.sessionID} is terminal and cannot heartbeat`)
+      }
       return {
         member_id: member.id,
         session_id: member.session_id,
