@@ -4,6 +4,7 @@ import { SessionV1 } from "@oc2-ai/core/v1/session"
 import { Database } from "@oc2-ai/core/database/database"
 import { eq } from "drizzle-orm"
 import { EventV2Bridge } from "@/event-v2-bridge"
+import { GlobalBus } from "@/bus/global"
 import { SessionEvent } from "@oc2-ai/core/session/event"
 import { SessionMessage } from "@oc2-ai/core/session/message"
 import { Prompt } from "@oc2-ai/core/session/prompt"
@@ -2871,6 +2872,83 @@ it.live(
 
         expect(result.parts.some((part) => part.type === "text" && part.text === "initial finalization")).toBe(true)
         expect(yield* llm.calls).toBe(1)
+      }),
+      {
+        git: true,
+        config: (url) => ({
+          ...providerCfg(url),
+          experimental: { agent_teams: true },
+        }),
+      },
+    ),
+  30_000,
+)
+
+it.live(
+  "GlobalBus-only matching mail wakes the parked lead and cleans up its listener",
+  () =>
+    provideTmpdirServer(
+      Effect.fnUntraced(function* ({ llm }) {
+        const { prompt, lead, worker, info } = yield* parkLeadOnWorker({ llm, memberStatus: "active" })
+        const barrier = yield* instrumentFinalizationParks()
+        const listeners = GlobalBus.listenerCount("event")
+
+        yield* llm.text("initial finalization")
+        const loopFiber = yield* prompt.loop({ sessionID: lead.id }).pipe(Effect.forkChild)
+        yield* llm.wait(1)
+        yield* barrier.next("initial GlobalBus barrier registration")
+        const parked = yield* barrier.next("stable GlobalBus barrier registration")
+
+        expect(barrier.activeFallbacks()).toBe(4)
+        expect(GlobalBus.listenerCount("event")).toBe(listeners + 1)
+
+        GlobalBus.emit("event", {
+          directory: `${lead.directory}-other`,
+          payload: {
+            type: "team.message.received",
+            properties: { teamID: info.id, recipients: [lead.id] },
+          },
+        })
+        expect(yield* Deferred.isDone(parked.signal)).toBe(false)
+
+        GlobalBus.emit("event", {
+          directory: lead.directory,
+          payload: {
+            type: "team.message.received",
+            properties: { teamID: `${info.id}-other`, recipients: [lead.id] },
+          },
+        })
+        expect(yield* Deferred.isDone(parked.signal)).toBe(false)
+
+        GlobalBus.emit("event", {
+          directory: lead.directory,
+          payload: {
+            type: "team.message.received",
+            properties: { teamID: info.id, recipients: [worker.id] },
+          },
+        })
+        expect(yield* Deferred.isDone(parked.signal)).toBe(false)
+
+        GlobalBus.emit("event", {
+          directory: lead.directory,
+          payload: {
+            type: "team.message.received",
+            properties: { teamID: info.id, recipients: [lead.id] },
+          },
+        })
+        expect(yield* Deferred.isDone(parked.signal)).toBe(true)
+
+        const reparked = yield* barrier.next("GlobalBus wake re-park")
+        expect(reparked.sessionID).toBe(lead.id)
+        expect(yield* llm.calls).toBe(1)
+        expect(GlobalBus.listenerCount("event")).toBe(listeners + 1)
+
+        yield* setLegacyTeamProtocol(info.id)
+        yield* prompt.cancel(lead.id)
+        yield* awaitWithTimeout(Fiber.join(loopFiber), "cancelled GlobalBus lead loop did not settle", "5 seconds")
+        expect(yield* barrier.run.signalPark(lead.id)).toBe(false)
+        expect(barrier.activeFallbacks()).toBe(0)
+        expect(GlobalBus.listenerCount("event")).toBe(listeners)
       }),
       {
         git: true,

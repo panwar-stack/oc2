@@ -65,6 +65,7 @@ import { LLMEvent } from "@oc2-ai/llm"
 import { Team } from "@/team/team"
 import { SessionControl } from "@oc2-ai/core/session/control"
 import { Runner } from "@/effect/runner"
+import { GlobalBus, type GlobalEvent } from "@/bus/global"
 
 // @ts-ignore
 globalThis.AI_SDK_LOG_WARNINGS = false
@@ -1607,6 +1608,20 @@ export const layer = Layer.effect(
           })
         })
       return yield* Effect.gen(function* () {
+        const globalWake = (event: GlobalEvent) => {
+          if (event.directory !== input.session.directory) return
+          const payload = event.payload
+          if (payload?.type === "team.closed" && payload.properties?.teamID === teamID) park?.notify()
+          if (
+            payload?.type === "team.message.received" &&
+            payload.properties?.teamID === teamID &&
+            Array.isArray(payload.properties.recipients) &&
+            payload.properties.recipients.includes(input.session.id)
+          )
+            park?.notify()
+        }
+        GlobalBus.on("event", globalWake)
+        unsubscribes.push(() => GlobalBus.off("event", globalWake))
         yield* Effect.forEach(
           ["team.message.received", "team.member.updated", "team.closed"],
           (type) =>
